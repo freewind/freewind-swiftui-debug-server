@@ -4,7 +4,7 @@ import Observation
 @Observable
 @MainActor
 final class DemoAppShell {
-    let debugBridge = DebugBridge()
+    let debugBridge = DebugBridge(appName: "Freewind SwiftUI Debug Server Demo")
     var counter = 0
     private var didStart = false
 
@@ -30,10 +30,17 @@ final class DemoAppShell {
             return .ok("Pressed increment button")
         }
 
-        debugBridge.start(port: 7879) { [weak self] in
+        debugBridge.start(
+            port: 7879,
+            screenName: { "DemoScreen" }
+        ) { [weak self] in
             guard let self else {
                 return [:]
             }
+            debugBridge.publishTargetState(
+                id: "increment_button",
+                state: ["count": "\(counter)"]
+            )
             return [
                 "counter": "\(counter)",
                 "debugStatus": debugBridge.statusMessage,

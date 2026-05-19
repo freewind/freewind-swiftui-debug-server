@@ -1,37 +1,44 @@
 import Foundation
 import Network
 
-// 本地 HTTP server。
+private struct HTTPRequest {
+    let method: String
+    let path: String
+    let url: URL?
+    let body: Data
+}
+
 final class DebugHTTPServer: @unchecked Sendable {
-    // 监听端口。
     private let port: UInt16
-    // 生成 snapshot。
-    private let getSnapshot: @Sendable () async -> DebugSnapshot
-    // 按条件生成 snapshot。
-    private let querySnapshot: @Sendable (DebugSnapshotQuery) async -> DebugSnapshotResponse
-    // 拉取最近事件。
-    private let getEvents: @Sendable (DebugEventQuery) async -> DebugEventResponse
-    // 执行动作。
+    private let getHelp: @Sendable () async -> DebugHelpResponse
+    private let getActionCatalog: @Sendable (DebugActionCatalogQuery) async -> DebugActionCatalogResponse
+    private let getLogs: @Sendable (DebugLogsQuery) async -> DebugLogsResponse
+    private let clearLogs: @Sendable () async -> DebugLogsClearResponse
+    private let getState: @Sendable (DebugStateQuery) async -> DebugStateResponse
+    private let getSnapshot: @Sendable (DebugSnapshotQuery) async -> DebugSnapshotResponse
     private let performAction: @Sendable (DebugActionRequest) async -> DebugActionResponse
-    // 底层 listener。
     private var listener: NWListener?
 
-    // 构造。
     init(
         port: UInt16,
-        getSnapshot: @escaping @Sendable () async -> DebugSnapshot,
-        querySnapshot: @escaping @Sendable (DebugSnapshotQuery) async -> DebugSnapshotResponse,
-        getEvents: @escaping @Sendable (DebugEventQuery) async -> DebugEventResponse,
+        getHelp: @escaping @Sendable () async -> DebugHelpResponse,
+        getActionCatalog: @escaping @Sendable (DebugActionCatalogQuery) async -> DebugActionCatalogResponse,
+        getLogs: @escaping @Sendable (DebugLogsQuery) async -> DebugLogsResponse,
+        clearLogs: @escaping @Sendable () async -> DebugLogsClearResponse,
+        getState: @escaping @Sendable (DebugStateQuery) async -> DebugStateResponse,
+        getSnapshot: @escaping @Sendable (DebugSnapshotQuery) async -> DebugSnapshotResponse,
         performAction: @escaping @Sendable (DebugActionRequest) async -> DebugActionResponse
     ) {
         self.port = port
+        self.getHelp = getHelp
+        self.getActionCatalog = getActionCatalog
+        self.getLogs = getLogs
+        self.clearLogs = clearLogs
+        self.getState = getState
         self.getSnapshot = getSnapshot
-        self.querySnapshot = querySnapshot
-        self.getEvents = getEvents
         self.performAction = performAction
     }
 
-    // 启动监听。
     func start() throws {
         let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
         listener.newConnectionHandler = { [weak self] connection in
@@ -46,126 +53,231 @@ final class DebugHTTPServer: @unchecked Sendable {
         self.listener = listener
     }
 
-    // 停止监听。
     func stop() {
         listener?.cancel()
         listener = nil
     }
 
-    // 处理单个连接。
     private func handle(connection: NWConnection) async {
         connection.start(queue: .global(qos: .userInitiated))
         do {
             let requestData = try await receiveAll(from: connection)
-            let requestText = String(decoding: requestData, as: UTF8.self)
-            let responseData = try await route(requestText: requestText)
+            let request = try parseRequest(requestData)
+            let responseData = try await route(request)
             try await send(responseData, to: connection)
         } catch {
-            let body = #"{"ok":false,"message":"\#(error.localizedDescription)"}"#
-            let response = httpResponse(status: "500 Internal Server Error", body: body)
+            let response = jsonErrorResponse(
+                status: "500 Internal Server Error",
+                message: error.localizedDescription
+            )
             try? await send(response, to: connection)
         }
         connection.cancel()
     }
 
-    // 读请求。
     private func receiveAll(from connection: NWConnection) async throws -> Data {
+        var data = Data()
+
+        while true {
+            let chunk = try await receiveChunk(from: connection)
+            if let body = chunk.data {
+                data.append(body)
+            }
+            if chunk.isComplete || requestComplete(data) {
+                return data
+            }
+        }
+    }
+
+    private func receiveChunk(from connection: NWConnection) async throws -> (data: Data?, isComplete: Bool) {
         try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
                 if let error {
                     continuation.resume(throwing: error)
                     return
                 }
-                guard let data else {
-                    continuation.resume(returning: Data())
-                    return
-                }
-                if isComplete {
-                    continuation.resume(returning: data)
-                    return
-                }
-                continuation.resume(returning: data)
+                continuation.resume(returning: (data, isComplete))
             }
         }
     }
 
-    // 路由。
-    private func route(requestText: String) async throws -> Data {
-        let parts = requestText.components(separatedBy: "\r\n\r\n")
-        let headerText = parts.first ?? ""
-        let bodyText = parts.count > 1 ? parts[1] : ""
-        let firstLine = headerText.components(separatedBy: "\r\n").first ?? ""
-        let requestLine = firstLine.split(separator: " ")
-        guard requestLine.count >= 2 else {
-            return httpResponse(status: "400 Bad Request", body: #"{"ok":false,"message":"Bad request"}"#)
-        }
-        let method = String(requestLine[0])
-        let path = String(requestLine[1])
-        let url = URL(string: "http://127.0.0.1\(path)")
-        let routePath = url?.path ?? path
-
-        if method == "GET", routePath == "/snapshot" {
-            let snapshot = await getSnapshot()
-            return try httpResponse(status: "200 OK", encodableBody: snapshot)
+    private func requestComplete(_ data: Data) -> Bool {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: delimiter) else {
+            return false
         }
 
-        if method == "POST", routePath == "/snapshot/query" {
-            let query = try JSONDecoder().decode(DebugSnapshotQuery.self, from: Data(bodyText.utf8))
-            let snapshot = await querySnapshot(query)
-            return try httpResponse(status: "200 OK", encodableBody: snapshot)
-        }
+        let headerData = data.subdata(in: 0..<range.lowerBound)
+        let headerText = String(decoding: headerData, as: UTF8.self)
+        let contentLength = headerText
+            .components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.components(separatedBy: ":").dropFirst().joined().trimmingCharacters(in: .whitespaces)) }
+            ?? 0
 
-        if method == "GET", routePath == "/events" {
-            let query = eventQuery(from: url)
-            let events = await getEvents(query)
-            return try httpResponse(status: "200 OK", encodableBody: events)
-        }
-
-        if method == "POST", routePath == "/action" {
-            let request = try JSONDecoder().decode(DebugActionRequest.self, from: Data(bodyText.utf8))
-            let result = await performAction(request)
-            return try httpResponse(
-                status: result.ok ? "200 OK" : "400 Bad Request",
-                encodableBody: result
-            )
-        }
-
-        return httpResponse(status: "404 Not Found", body: #"{"ok":false,"message":"Not found"}"#)
+        let bodyStart = range.upperBound
+        let bodyCount = data.count - bodyStart
+        return bodyCount >= contentLength
     }
 
-    private func eventQuery(from url: URL?) -> DebugEventQuery {
+    private func parseRequest(_ data: Data) throws -> HTTPRequest {
+        let delimiter = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: delimiter) else {
+            throw NSError(domain: "DebugHTTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+        }
+
+        let headerData = data.subdata(in: 0..<range.lowerBound)
+        let bodyData = data.subdata(in: range.upperBound..<data.count)
+        let headerText = String(decoding: headerData, as: UTF8.self)
+        let lines = headerText.components(separatedBy: "\r\n")
+        guard let requestLine = lines.first else {
+            throw NSError(domain: "DebugHTTPServer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+        }
+
+        let parts = requestLine.split(separator: " ")
+        guard parts.count >= 2 else {
+            throw NSError(domain: "DebugHTTPServer", code: 3, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+        }
+
+        let method = String(parts[0])
+        let rawPath = String(parts[1])
+        return HTTPRequest(
+            method: method,
+            path: URL(string: "http://127.0.0.1\(rawPath)")?.path ?? rawPath,
+            url: URL(string: "http://127.0.0.1\(rawPath)"),
+            body: bodyData
+        )
+    }
+
+    private func route(_ request: HTTPRequest) async throws -> Data {
+        switch (request.method, request.path) {
+        case ("GET", "/"):
+            return jsonErrorResponse(
+                status: "501 Not Implemented",
+                message: "html console not implemented yet"
+            )
+        case ("GET", "/help"):
+            return try jsonResponse(status: "200 OK", body: await getHelp())
+        case ("GET", "/action"):
+            return try jsonResponse(
+                status: "200 OK",
+                body: await getActionCatalog(actionQuery(from: request.url))
+            )
+        case ("POST", "/action"):
+            let actionRequest = try JSONDecoder().decode(DebugActionRequest.self, from: request.body)
+            let result = await performAction(actionRequest)
+            return try jsonResponse(
+                status: result.accepted ? "200 OK" : "400 Bad Request",
+                body: result
+            )
+        case ("GET", "/logs"):
+            return try jsonResponse(
+                status: "200 OK",
+                body: await getLogs(logsQuery(from: request.url))
+            )
+        case ("DELETE", "/logs"):
+            return try jsonResponse(status: "200 OK", body: await clearLogs())
+        case ("GET", "/state"):
+            return try jsonResponse(
+                status: "200 OK",
+                body: await getState(stateQuery(from: request.url))
+            )
+        case ("GET", "/snapshot"):
+            return try jsonResponse(
+                status: "200 OK",
+                body: await getSnapshot(snapshotQuery(from: request.url))
+            )
+        default:
+            return jsonErrorResponse(status: "404 Not Found", message: "not found")
+        }
+    }
+
+    private func actionQuery(from url: URL?) -> DebugActionCatalogQuery {
+        let values = queryMap(from: url)
+        return DebugActionCatalogQuery(
+            targetId: values["targetId"],
+            action: values["action"],
+            screen: values["screen"]
+        )
+    }
+
+    private func logsQuery(from url: URL?) -> DebugLogsQuery {
+        let values = queryMap(from: url)
+        return DebugLogsQuery(
+            event: values["event"],
+            level: values["level"],
+            source: values["source"],
+            targetId: values["targetId"],
+            screen: values["screen"],
+            from: values["from"],
+            to: values["to"],
+            limit: Int(values["limit"] ?? "") ?? 20,
+            keyword: values["keyword"]
+        )
+    }
+
+    private func stateQuery(from url: URL?) -> DebugStateQuery {
+        let values = queryMap(from: url)
+        return DebugStateQuery(
+            keys: splitCSV(values["keys"]),
+            targetId: values["targetId"],
+            scope: values["scope"]
+        )
+    }
+
+    private func snapshotQuery(from url: URL?) -> DebugSnapshotQuery {
+        let values = queryMap(from: url)
+        return DebugSnapshotQuery(
+            targetId: values["targetId"],
+            scope: values["scope"],
+            depth: Int(values["depth"] ?? ""),
+            types: splitCSV(values["types"]),
+            textKeyword: values["textKeyword"],
+            visible: parseBool(values["visible"]),
+            enabled: parseBool(values["enabled"]),
+            clickable: parseBool(values["clickable"]),
+            fields: splitCSV(values["fields"]),
+            limit: Int(values["limit"] ?? "") ?? 20
+        )
+    }
+
+    private func queryMap(from url: URL?) -> [String: String] {
         guard
             let url,
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else {
-            return DebugEventQuery()
+            return [:]
         }
 
-        let queryItems = (components.queryItems ?? []).reduce(into: [String: String]()) { result, item in
+        return (components.queryItems ?? []).reduce(into: [String: String]()) { result, item in
             result[item.name] = item.value ?? ""
         }
-
-        return DebugEventQuery(
-            afterSequence: Int(queryItems["after"] ?? "") ?? 0,
-            limit: Int(queryItems["limit"] ?? "") ?? 50,
-            sources: splitCSV(queryItems["source"]),
-            kinds: splitCSV(queryItems["kind"]),
-            ids: splitCSV(queryItems["id"])
-        )
     }
 
-    private func splitCSV(_ value: String?) -> [String]? {
+    private func splitCSV(_ value: String?) -> [String] {
         guard let value, !value.isEmpty else {
-            return nil
+            return []
         }
-        let items = value
+        return value
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return items.isEmpty ? nil : items
     }
 
-    // 发响应。
+    private func parseBool(_ value: String?) -> Bool? {
+        guard let value else {
+            return nil
+        }
+        switch value.lowercased() {
+        case "1", "true", "yes":
+            return true
+        case "0", "false", "no":
+            return false
+        default:
+            return nil
+        }
+    }
+
     private func send(_ data: Data, to connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
@@ -178,24 +290,30 @@ final class DebugHTTPServer: @unchecked Sendable {
         }
     }
 
-    // HTTP + JSON。
-    private func httpResponse<T: Encodable>(status: String, encodableBody: T) throws -> Data {
+    private func jsonResponse<T: Encodable>(status: String, body: T) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let body = try encoder.encode(encodableBody)
-        return httpResponse(status: status, bodyData: body)
+        let bodyData = try encoder.encode(body)
+        return httpResponse(
+            status: status,
+            contentType: "application/json; charset=utf-8",
+            bodyData: bodyData
+        )
     }
 
-    // HTTP + 纯文本 body。
-    private func httpResponse(status: String, body: String) -> Data {
-        httpResponse(status: status, bodyData: Data(body.utf8))
+    private func jsonErrorResponse(status: String, message: String) -> Data {
+        let body = #"{"accepted":false,"message":"\#(message)"}"#
+        return httpResponse(
+            status: status,
+            contentType: "application/json; charset=utf-8",
+            bodyData: Data(body.utf8)
+        )
     }
 
-    // 组装响应。
-    private func httpResponse(status: String, bodyData: Data) -> Data {
+    private func httpResponse(status: String, contentType: String, bodyData: Data) -> Data {
         let header = [
             "HTTP/1.1 \(status)",
-            "Content-Type: application/json; charset=utf-8",
+            "Content-Type: \(contentType)",
             "Content-Length: \(bodyData.count)",
             "Connection: close",
             "",

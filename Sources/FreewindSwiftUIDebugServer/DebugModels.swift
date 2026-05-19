@@ -2,28 +2,17 @@ import Foundation
 
 // 单个调试节点快照。
 public struct DebugNodeSnapshot: Codable, Identifiable, Sendable {
-    // 稳定节点 id。
     public let id: String
-    // 父节点 id。
     public let parentID: String?
-    // 节点角色，如 button / text / panel。
     public let role: String
-    // 对外标签。
     public let label: String
-    // 左上角 x。
     public let x: Double
-    // 左上角 y。
     public let y: Double
-    // 宽度。
     public let width: Double
-    // 高度。
     public let height: Double
-    // 是否可见。
     public let isVisible: Bool
-    // 允许动作。
     public let actions: [String]
 
-    // 对外构造。
     public init(
         id: String,
         parentID: String? = nil,
@@ -49,335 +38,578 @@ public struct DebugNodeSnapshot: Codable, Identifiable, Sendable {
     }
 }
 
-// 节点字段投影结果。
-public struct DebugNodePayload: Codable, Identifiable, Sendable {
-    public let id: String
-    public let parentID: String?
-    public let role: String?
-    public let label: String?
-    public let x: Double?
-    public let y: Double?
-    public let width: Double?
-    public let height: Double?
-    public let isVisible: Bool?
-    public let actions: [String]?
+// server 运行时上下文。
+public struct DebugServerContext: Sendable {
+    public let appName: String
+    public let screenName: String
+    public let serverTime: String
 
     public init(
-        id: String,
-        parentID: String? = nil,
-        role: String? = nil,
-        label: String? = nil,
-        x: Double? = nil,
-        y: Double? = nil,
-        width: Double? = nil,
-        height: Double? = nil,
-        isVisible: Bool? = nil,
-        actions: [String]? = nil
+        appName: String,
+        screenName: String,
+        serverTime: String = debugTimestampString()
     ) {
-        self.id = id
-        self.parentID = parentID
-        self.role = role
-        self.label = label
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-        self.isVisible = isVisible
-        self.actions = actions
-    }
-}
-
-// 整体 snapshot。
-public struct DebugSnapshot: Codable, Sendable {
-    // 时间戳。
-    public let timestamp: String
-    // 业务状态，使用结构化 JSON 值承载。
-    public let appState: [String: String]
-    // 节点总数。
-    public let nodeCount: Int
-    // 所有节点。
-    public let nodes: [DebugNodeSnapshot]
-    // 所有 intent 名。
-    public let actionNames: [String]
-
-    // 对外构造。
-    public init(
-        timestamp: String,
-        appState: [String: String],
-        nodeCount: Int,
-        nodes: [DebugNodeSnapshot],
-        actionNames: [String]
-    ) {
-        self.timestamp = timestamp
-        self.appState = appState
-        self.nodeCount = nodeCount
-        self.nodes = nodes
-        self.actionNames = actionNames
-    }
-}
-
-// 矩形过滤。
-public struct DebugRectFilter: Codable, Sendable {
-    public let minX: Double?
-    public let minY: Double?
-    public let maxX: Double?
-    public let maxY: Double?
-
-    public init(minX: Double? = nil, minY: Double? = nil, maxX: Double? = nil, maxY: Double? = nil) {
-        self.minX = minX
-        self.minY = minY
-        self.maxX = maxX
-        self.maxY = maxY
-    }
-}
-
-// 精简 snapshot 查询。
-public struct DebugSnapshotQuery: Codable, Sendable {
-    public let includeNodes: Bool
-    public let includeAppState: Bool
-    public let includeActionNames: Bool
-    public let nodeFields: [String]?
-    public let appStateKeys: [String]?
-    public let nodeIDs: [String]?
-    public let roles: [String]?
-    public let visibleOnly: Bool
-    public let includeAncestors: Bool
-    public let ancestorDepth: Int?
-    public let rect: DebugRectFilter?
-    public let limit: Int?
-
-    public init(
-        includeNodes: Bool = true,
-        includeAppState: Bool = false,
-        includeActionNames: Bool = false,
-        nodeFields: [String]? = nil,
-        appStateKeys: [String]? = nil,
-        nodeIDs: [String]? = nil,
-        roles: [String]? = nil,
-        visibleOnly: Bool = false,
-        includeAncestors: Bool = false,
-        ancestorDepth: Int? = nil,
-        rect: DebugRectFilter? = nil,
-        limit: Int? = 50
-    ) {
-        self.includeNodes = includeNodes
-        self.includeAppState = includeAppState
-        self.includeActionNames = includeActionNames
-        self.nodeFields = nodeFields
-        self.appStateKeys = appStateKeys
-        self.nodeIDs = nodeIDs
-        self.roles = roles
-        self.visibleOnly = visibleOnly
-        self.includeAncestors = includeAncestors
-        self.ancestorDepth = ancestorDepth
-        self.rect = rect
-        self.limit = limit
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case includeNodes
-        case includeAppState
-        case includeActionNames
-        case nodeFields
-        case appStateKeys
-        case nodeIDs
-        case roles
-        case visibleOnly
-        case includeAncestors
-        case ancestorDepth
-        case rect
-        case limit
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            includeNodes: try container.decodeIfPresent(Bool.self, forKey: .includeNodes) ?? true,
-            includeAppState: try container.decodeIfPresent(Bool.self, forKey: .includeAppState) ?? false,
-            includeActionNames: try container.decodeIfPresent(Bool.self, forKey: .includeActionNames) ?? false,
-            nodeFields: try container.decodeIfPresent([String].self, forKey: .nodeFields),
-            appStateKeys: try container.decodeIfPresent([String].self, forKey: .appStateKeys),
-            nodeIDs: try container.decodeIfPresent([String].self, forKey: .nodeIDs),
-            roles: try container.decodeIfPresent([String].self, forKey: .roles),
-            visibleOnly: try container.decodeIfPresent(Bool.self, forKey: .visibleOnly) ?? false,
-            includeAncestors: try container.decodeIfPresent(Bool.self, forKey: .includeAncestors) ?? false,
-            ancestorDepth: try container.decodeIfPresent(Int.self, forKey: .ancestorDepth),
-            rect: try container.decodeIfPresent(DebugRectFilter.self, forKey: .rect),
-            limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 50
-        )
-    }
-}
-
-// 查询后的 snapshot 结果。
-public struct DebugSnapshotResponse: Codable, Sendable {
-    public let timestamp: String
-    public let totalNodeCount: Int
-    public let matchedNodeCount: Int
-    public let appState: [String: String]?
-    public let nodes: [DebugNodePayload]?
-    public let actionNames: [String]?
-
-    public init(
-        timestamp: String,
-        totalNodeCount: Int,
-        matchedNodeCount: Int,
-        appState: [String: String]? = nil,
-        nodes: [DebugNodePayload]? = nil,
-        actionNames: [String]? = nil
-    ) {
-        self.timestamp = timestamp
-        self.totalNodeCount = totalNodeCount
-        self.matchedNodeCount = matchedNodeCount
-        self.appState = appState
-        self.nodes = nodes
-        self.actionNames = actionNames
+        self.appName = appName
+        self.screenName = screenName
+        self.serverTime = serverTime
     }
 }
 
 // 外部动作请求。
 public struct DebugActionRequest: Codable, Sendable {
-    // 请求类型：intent / node。
-    public let type: String
-    // intent 名。
-    public let name: String?
-    // 节点 id。
-    public let id: String?
-    // 节点动作名。
-    public let action: String?
-    // 来源，如 ai / human / system。
+    public let action: String
+    public let targetId: String
+    public let text: String?
+    public let dx: Double?
+    public let dy: Double?
+    public let args: [String: String]?
     public let source: String?
-    // 额外标签。
-    public let metadata: [String: String]?
 
-    // 对外构造。
     public init(
-        type: String,
-        name: String? = nil,
-        id: String? = nil,
-        action: String? = nil,
-        source: String? = nil,
-        metadata: [String: String]? = nil
+        action: String,
+        targetId: String,
+        text: String? = nil,
+        dx: Double? = nil,
+        dy: Double? = nil,
+        args: [String: String]? = nil,
+        source: String? = nil
     ) {
-        self.type = type
-        self.name = name
-        self.id = id
         self.action = action
+        self.targetId = targetId
+        self.text = text
+        self.dx = dx
+        self.dy = dy
+        self.args = args
         self.source = source
-        self.metadata = metadata
     }
 }
 
 // 动作响应。
 public struct DebugActionResponse: Codable, Sendable {
-    // 是否成功。
-    public let ok: Bool
-    // 说明文本。
+    public let accepted: Bool
     public let message: String
-
-    // 对外构造。
-    public init(ok: Bool, message: String) {
-        self.ok = ok
-        self.message = message
-    }
-
-    // 成功快捷构造。
-    public static func ok(_ message: String) -> Self {
-        Self(ok: true, message: message)
-    }
-
-    // 失败快捷构造。
-    public static func fail(_ message: String) -> Self {
-        Self(ok: false, message: message)
-    }
-}
-
-// 单条操作事件。
-public struct DebugEvent: Codable, Sendable {
-    public let sequence: Int
-    public let timestamp: String
-    public let source: String
-    public let kind: String
-    public let name: String?
-    public let id: String?
     public let action: String?
-    public let ok: Bool?
-    public let message: String?
-    public let metadata: [String: String]
+    public let targetId: String?
 
     public init(
-        sequence: Int,
-        timestamp: String,
-        source: String,
-        kind: String,
-        name: String? = nil,
-        id: String? = nil,
+        accepted: Bool,
+        message: String,
         action: String? = nil,
-        ok: Bool? = nil,
-        message: String? = nil,
-        metadata: [String: String] = [:]
+        targetId: String? = nil
     ) {
-        self.sequence = sequence
-        self.timestamp = timestamp
-        self.source = source
-        self.kind = kind
-        self.name = name
-        self.id = id
-        self.action = action
-        self.ok = ok
+        self.accepted = accepted
         self.message = message
-        self.metadata = metadata
+        self.action = action
+        self.targetId = targetId
+    }
+
+    public static func ok(_ message: String) -> Self {
+        Self(accepted: true, message: message)
+    }
+
+    public static func fail(_ message: String) -> Self {
+        Self(accepted: false, message: message)
     }
 }
 
-// 事件查询。
-public struct DebugEventQuery: Codable, Sendable {
-    public let afterSequence: Int
-    public let limit: Int
-    public let sources: [String]?
-    public let kinds: [String]?
-    public let ids: [String]?
+// 清空日志响应。
+public struct DebugLogsClearResponse: Codable, Sendable {
+    public let accepted: Bool
+    public let message: String
+    public let clearedCount: Int
+
+    public init(accepted: Bool, message: String, clearedCount: Int) {
+        self.accepted = accepted
+        self.message = message
+        self.clearedCount = clearedCount
+    }
+}
+
+// action query。
+public struct DebugActionCatalogQuery: Sendable {
+    public let targetId: String?
+    public let action: String?
+    public let screen: String?
 
     public init(
-        afterSequence: Int = 0,
-        limit: Int = 50,
-        sources: [String]? = nil,
-        kinds: [String]? = nil,
-        ids: [String]? = nil
+        targetId: String? = nil,
+        action: String? = nil,
+        screen: String? = nil
     ) {
-        self.afterSequence = afterSequence
-        self.limit = limit
-        self.sources = sources
-        self.kinds = kinds
-        self.ids = ids
+        self.targetId = targetId
+        self.action = action
+        self.screen = screen
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case afterSequence
-        case limit
-        case sources
-        case kinds
-        case ids
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            afterSequence: try container.decodeIfPresent(Int.self, forKey: .afterSequence) ?? 0,
-            limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 50,
-            sources: try container.decodeIfPresent([String].self, forKey: .sources),
-            kinds: try container.decodeIfPresent([String].self, forKey: .kinds),
-            ids: try container.decodeIfPresent([String].self, forKey: .ids)
-        )
+    public var hasFilters: Bool {
+        targetId != nil || action != nil || screen != nil
     }
 }
 
-// 事件拉取结果。
-public struct DebugEventResponse: Codable, Sendable {
-    public let nextSequence: Int
-    public let events: [DebugEvent]
+// /action item。
+public struct DebugActionCatalogResponse: Codable, Sendable {
+    public let summary: DebugActionCatalogSummary
+    public let items: [DebugActionCatalogItem]
 
-    public init(nextSequence: Int, events: [DebugEvent]) {
-        self.nextSequence = nextSequence
-        self.events = events
+    public init(summary: DebugActionCatalogSummary, items: [DebugActionCatalogItem]) {
+        self.summary = summary
+        self.items = items
     }
+}
+
+public struct DebugActionCatalogSummary: Codable, Sendable {
+    public let targetCount: Int
+    public let actionCount: Int
+
+    public init(targetCount: Int, actionCount: Int) {
+        self.targetCount = targetCount
+        self.actionCount = actionCount
+    }
+}
+
+public struct DebugActionCatalogItem: Codable, Sendable, Identifiable {
+    public let targetId: String
+    public let targetType: String
+    public let screen: String
+    public let actions: [DebugActionDescriptor]
+
+    public var id: String { targetId }
+
+    public init(
+        targetId: String,
+        targetType: String,
+        screen: String,
+        actions: [DebugActionDescriptor]
+    ) {
+        self.targetId = targetId
+        self.targetType = targetType
+        self.screen = screen
+        self.actions = actions
+    }
+}
+
+public struct DebugActionDescriptor: Codable, Sendable {
+    public let name: String
+    public let args: [String]
+    public let summary: String
+    public let example: DebugActionRequest
+
+    public init(
+        name: String,
+        args: [String],
+        summary: String,
+        example: DebugActionRequest
+    ) {
+        self.name = name
+        self.args = args
+        self.summary = summary
+        self.example = example
+    }
+}
+
+// log entry。
+public struct DebugLogEntry: Codable, Sendable {
+    public let seq: Int
+    public let time: String
+    public let source: String
+    public let level: String
+    public let event: String
+    public let targetId: String?
+    public let summary: String
+    public let data: [String: String]
+
+    public init(
+        seq: Int,
+        time: String,
+        source: String,
+        level: String,
+        event: String,
+        targetId: String? = nil,
+        summary: String,
+        data: [String: String] = [:]
+    ) {
+        self.seq = seq
+        self.time = time
+        self.source = source
+        self.level = level
+        self.event = event
+        self.targetId = targetId
+        self.summary = summary
+        self.data = data
+    }
+}
+
+// logs query。
+public struct DebugLogsQuery: Sendable {
+    public let event: String?
+    public let level: String?
+    public let source: String?
+    public let targetId: String?
+    public let screen: String?
+    public let from: String?
+    public let to: String?
+    public let limit: Int
+    public let keyword: String?
+
+    public init(
+        event: String? = nil,
+        level: String? = nil,
+        source: String? = nil,
+        targetId: String? = nil,
+        screen: String? = nil,
+        from: String? = nil,
+        to: String? = nil,
+        limit: Int = 20,
+        keyword: String? = nil
+    ) {
+        self.event = event
+        self.level = level
+        self.source = source
+        self.targetId = targetId
+        self.screen = screen
+        self.from = from
+        self.to = to
+        self.limit = limit
+        self.keyword = keyword
+    }
+
+    public var hasFilters: Bool {
+        event != nil
+            || level != nil
+            || source != nil
+            || targetId != nil
+            || screen != nil
+            || from != nil
+            || to != nil
+            || keyword != nil
+    }
+}
+
+public struct DebugLogsResponse: Codable, Sendable {
+    public let summary: DebugLogsSummary?
+    public let items: [DebugLogEntry]?
+    public let nextAfterSeq: Int?
+
+    public init(
+        summary: DebugLogsSummary? = nil,
+        items: [DebugLogEntry]? = nil,
+        nextAfterSeq: Int? = nil
+    ) {
+        self.summary = summary
+        self.items = items
+        self.nextAfterSeq = nextAfterSeq
+    }
+}
+
+public struct DebugLogsSummary: Codable, Sendable {
+    public let total: Int
+    public let timeRange: DebugTimeRange?
+    public let levelCounts: [String: Int]
+    public let sourceCounts: [String: Int]
+    public let eventCountsTop: [String: Int]
+
+    public init(
+        total: Int,
+        timeRange: DebugTimeRange?,
+        levelCounts: [String: Int],
+        sourceCounts: [String: Int],
+        eventCountsTop: [String: Int]
+    ) {
+        self.total = total
+        self.timeRange = timeRange
+        self.levelCounts = levelCounts
+        self.sourceCounts = sourceCounts
+        self.eventCountsTop = eventCountsTop
+    }
+}
+
+public struct DebugTimeRange: Codable, Sendable {
+    public let from: String
+    public let to: String
+
+    public init(from: String, to: String) {
+        self.from = from
+        self.to = to
+    }
+}
+
+// state query。
+public struct DebugStateQuery: Sendable {
+    public let keys: [String]
+    public let targetId: String?
+    public let scope: String?
+
+    public init(
+        keys: [String] = [],
+        targetId: String? = nil,
+        scope: String? = nil
+    ) {
+        self.keys = keys
+        self.targetId = targetId
+        self.scope = scope
+    }
+
+    public var hasFilters: Bool {
+        !keys.isEmpty || targetId != nil || scope != nil
+    }
+}
+
+public struct DebugStateResponse: Codable, Sendable {
+    public let summary: DebugStateSummary?
+    public let appState: [String: String]?
+    public let targetState: [String: String]?
+
+    public init(
+        summary: DebugStateSummary? = nil,
+        appState: [String: String]? = nil,
+        targetState: [String: String]? = nil
+    ) {
+        self.summary = summary
+        self.appState = appState
+        self.targetState = targetState
+    }
+}
+
+public struct DebugStateSummary: Codable, Sendable {
+    public let appStateKeys: [DebugStateKeySample]
+    public let targetStateTargets: [String]
+
+    public init(appStateKeys: [DebugStateKeySample], targetStateTargets: [String]) {
+        self.appStateKeys = appStateKeys
+        self.targetStateTargets = targetStateTargets
+    }
+}
+
+public struct DebugStateKeySample: Codable, Sendable {
+    public let key: String
+    public let sample: String
+
+    public init(key: String, sample: String) {
+        self.key = key
+        self.sample = sample
+    }
+}
+
+// snapshot query。
+public struct DebugSnapshotQuery: Sendable {
+    public let targetId: String?
+    public let scope: String?
+    public let depth: Int?
+    public let types: [String]
+    public let textKeyword: String?
+    public let visible: Bool?
+    public let enabled: Bool?
+    public let clickable: Bool?
+    public let fields: [String]
+    public let limit: Int
+
+    public init(
+        targetId: String? = nil,
+        scope: String? = nil,
+        depth: Int? = nil,
+        types: [String] = [],
+        textKeyword: String? = nil,
+        visible: Bool? = nil,
+        enabled: Bool? = nil,
+        clickable: Bool? = nil,
+        fields: [String] = [],
+        limit: Int = 20
+    ) {
+        self.targetId = targetId
+        self.scope = scope
+        self.depth = depth
+        self.types = types
+        self.textKeyword = textKeyword
+        self.visible = visible
+        self.enabled = enabled
+        self.clickable = clickable
+        self.fields = fields
+        self.limit = limit
+    }
+
+    public var hasFilters: Bool {
+        targetId != nil
+            || scope != nil
+            || depth != nil
+            || !types.isEmpty
+            || textKeyword != nil
+            || visible != nil
+            || enabled != nil
+            || clickable != nil
+            || !fields.isEmpty
+    }
+}
+
+public struct DebugSnapshotResponse: Codable, Sendable {
+    public let summary: DebugSnapshotSummary?
+    public let fieldCatalog: [String]?
+    public let examples: [String]?
+    public let screen: String?
+    public let nodes: [DebugSnapshotNodePayload]?
+
+    public init(
+        summary: DebugSnapshotSummary? = nil,
+        fieldCatalog: [String]? = nil,
+        examples: [String]? = nil,
+        screen: String? = nil,
+        nodes: [DebugSnapshotNodePayload]? = nil
+    ) {
+        self.summary = summary
+        self.fieldCatalog = fieldCatalog
+        self.examples = examples
+        self.screen = screen
+        self.nodes = nodes
+    }
+}
+
+public struct DebugSnapshotSummary: Codable, Sendable {
+    public let screen: String
+    public let nodeCount: Int
+    public let rootIds: [String]
+    public let typeCounts: [String: Int]
+    public let clickableCount: Int
+
+    public init(
+        screen: String,
+        nodeCount: Int,
+        rootIds: [String],
+        typeCounts: [String: Int],
+        clickableCount: Int
+    ) {
+        self.screen = screen
+        self.nodeCount = nodeCount
+        self.rootIds = rootIds
+        self.typeCounts = typeCounts
+        self.clickableCount = clickableCount
+    }
+}
+
+public struct DebugSnapshotNodePayload: Codable, Sendable, Identifiable {
+    public let id: String
+    public let parentId: String?
+    public let type: String?
+    public let text: String?
+    public let role: String?
+    public let visible: Bool?
+    public let enabled: Bool?
+    public let clickable: Bool?
+    public let value: String?
+    public let bounds: DebugBounds?
+
+    public init(
+        id: String,
+        parentId: String? = nil,
+        type: String? = nil,
+        text: String? = nil,
+        role: String? = nil,
+        visible: Bool? = nil,
+        enabled: Bool? = nil,
+        clickable: Bool? = nil,
+        value: String? = nil,
+        bounds: DebugBounds? = nil
+    ) {
+        self.id = id
+        self.parentId = parentId
+        self.type = type
+        self.text = text
+        self.role = role
+        self.visible = visible
+        self.enabled = enabled
+        self.clickable = clickable
+        self.value = value
+        self.bounds = bounds
+    }
+}
+
+public struct DebugBounds: Codable, Sendable {
+    public let left: Double
+    public let top: Double
+    public let width: Double
+    public let height: Double
+
+    public init(left: Double, top: Double, width: Double, height: Double) {
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+    }
+}
+
+// /help。
+public struct DebugHelpResponse: Codable, Sendable {
+    public let appName: String
+    public let screenName: String
+    public let serverTime: String
+    public let capabilities: [String]
+    public let counts: DebugHelpCounts
+    public let endpoints: [DebugEndpointDescriptor]
+    public let examples: [String]
+
+    public init(
+        appName: String,
+        screenName: String,
+        serverTime: String,
+        capabilities: [String],
+        counts: DebugHelpCounts,
+        endpoints: [DebugEndpointDescriptor],
+        examples: [String]
+    ) {
+        self.appName = appName
+        self.screenName = screenName
+        self.serverTime = serverTime
+        self.capabilities = capabilities
+        self.counts = counts
+        self.endpoints = endpoints
+        self.examples = examples
+    }
+}
+
+public struct DebugHelpCounts: Codable, Sendable {
+    public let actionTargetCount: Int
+    public let logCount: Int
+    public let stateKeyCount: Int
+    public let snapshotNodeCount: Int
+
+    public init(
+        actionTargetCount: Int,
+        logCount: Int,
+        stateKeyCount: Int,
+        snapshotNodeCount: Int
+    ) {
+        self.actionTargetCount = actionTargetCount
+        self.logCount = logCount
+        self.stateKeyCount = stateKeyCount
+        self.snapshotNodeCount = snapshotNodeCount
+    }
+}
+
+public struct DebugEndpointDescriptor: Codable, Sendable {
+    public let method: String
+    public let path: String
+    public let summary: String
+    public let queryFields: [String]?
+    public let bodyFields: [String]?
+
+    public init(
+        method: String,
+        path: String,
+        summary: String,
+        queryFields: [String]? = nil,
+        bodyFields: [String]? = nil
+    ) {
+        self.method = method
+        self.path = path
+        self.summary = summary
+        self.queryFields = queryFields
+        self.bodyFields = bodyFields
+    }
+}
+
+public func debugTimestampString(_ date: Date = Date()) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = .current
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    return formatter.string(from: date)
 }

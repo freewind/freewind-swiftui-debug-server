@@ -1,27 +1,32 @@
 # FreewindSwiftUIDebugServer
 
-给 `SwiftUI macOS` 应用提供一套最小 `debug bridge`：
+给 `SwiftUI macOS` app 提供一套给 AI 用的本地 debug server。
 
-- 收集显式标记节点的 `id / role / label / frame / visible / actions`
-- 通过本地 `HTTP server` 暴露 `snapshot`
-- 记录最近 `human / ai / system` 操作事件
-- 通过 `action` 接口回调到你自己的业务入口
+目标：
 
-## 适用边界
+- 暴露简单 `HTTP API`
+- 导出当前已注册节点的结构化快照
+- 导出精简 `appState / targetState`
+- 记录结构化 `logs`
+- 通过统一 `POST /action` 驱动已注册动作
 
-- 只适合 `DEBUG` / 本机开发
-- 只暴露“显式标过的关键节点”
-- 不试图自动扒出全部 SwiftUI 私有 view tree
+当前协议已对齐 Android 版的核心心智：
 
-## 你在业务代码里主要多写什么
+- `GET /help`
+- `GET /action`
+- `POST /action`
+- `GET /logs`
+- `DELETE /logs`
+- `GET /state`
+- `GET /snapshot`
 
-1. 顶层持有一个 `DebugBridge`
-2. 根 view 注入 `.environment(bridge.registry)`
-3. 关键组件尽量只写 1 个 `.debugNode(...)`
-4. 常见人类交互尽量经 `debugBridge.tracked(...)` / `debugBridge.wrapNodeAction(...)`
-5. 启动时注册可被外部调用的动作
+说明：
 
-## 最小接入示例
+- `GET /` 的 html console 先保留，暂未实现
+- 这是“已注册关键节点”模型，不是自动穷举 SwiftUI 私有 view tree
+- 推荐只在 `DEBUG` / 本机开发启用
+
+## 代码侧最小接入
 
 ```swift
 import SwiftUI
@@ -31,34 +36,38 @@ import FreewindSwiftUIDebugServer
 @MainActor
 final class DemoStore {
     var counter = 0
-
-    func increment() {
-        counter += 1
-    }
-
-    func debugState() -> [String: String] {
-        ["counter": "\(counter)"]
-    }
 }
 
 @Observable
 @MainActor
 final class DemoShell {
     let store = DemoStore()
-    let debugBridge = DebugBridge()
+    let debugBridge = DebugBridge(appName: "Demo App")
 
     func start() {
+        debugBridge.registerNodeAction(id: "increment_button", action: "press") { [store] in
+            store.counter += 1
+            return .ok("accepted")
+        }
+
         debugBridge.registerIntent(name: "increment_counter") { [store] in
-            store.increment()
-            return .ok("Counter incremented")
+            store.counter += 1
+            return .ok("accepted")
         }
 
         debugBridge.start(
-            port: 7878,
-            appState: { [store] in
-                store.debugState()
-            }
-        )
+            port: 7879,
+            screenName: { "DemoScreen" }
+        ) { [store, debugBridge] in
+            debugBridge.publishTargetState(
+                id: "increment_button",
+                state: ["count": "\(store.counter)"]
+            )
+            return [
+                "counter": "\(store.counter)",
+                "debugStatus": debugBridge.statusMessage,
+            ]
+        }
     }
 }
 
@@ -66,152 +75,273 @@ struct ContentView: View {
     @Environment(DemoShell.self) private var shell
 
     var body: some View {
-        Button("Increment") {
-            shell.store.increment()
-        }
+        Button(
+            "Increment",
+            action: shell.debugBridge.wrapNodeAction(
+                id: "increment_button",
+                action: "press"
+            ) {
+                shell.store.counter += 1
+            }
+        )
         .debugNode(
             id: "increment_button",
             role: "button",
-            label: "Increment button",
-            actions: ["press"],
-            tapAction: "tap"
+            label: "Increment counter button",
+            actions: ["press"]
         )
-        .onAppear {
-            shell.debugBridge.registerNodeAction(id: "increment_button", action: "press") { [store = shell.store] in
-                store.increment()
-                return .ok("Pressed increment")
-            }
-        }
     }
 }
 ```
 
-## 接口
+## endpoint
 
-- `GET /snapshot`
-- `POST /snapshot/query`
-- `GET /events`
-- `POST /action`
+基址：
 
-`POST /action` body:
-
-```json
-{"type":"node","id":"increment_button","action":"press","source":"ai","metadata":{"task":"increment"}}
+```text
+http://127.0.0.1:7879
 ```
 
-或：
+### `GET /help`
 
-```json
-{"type":"intent","name":"increment_counter","source":"ai"}
+返回当前能力、字段、示例。
+
+```bash
+curl http://127.0.0.1:7879/help
 ```
 
-`POST /snapshot/query` body，适合省 token 拉取：
+返回示例：
 
 ```json
 {
-  "includeNodes": true,
-  "includeAppState": true,
-  "appStateKeys": ["counter"],
-  "nodeIDs": ["increment_button"],
-  "includeAncestors": true,
-  "nodeFields": ["role", "label", "x", "y", "width", "height", "actions"],
-  "limit": 20
+  "appName": "Demo App",
+  "screenName": "DemoScreen",
+  "serverTime": "20260519-220000",
+  "capabilities": ["action", "logs", "state", "snapshot"],
+  "counts": {
+    "actionTargetCount": 2,
+    "logCount": 0,
+    "stateKeyCount": 2,
+    "snapshotNodeCount": 5
+  }
 }
 ```
 
-常用能力：
+### `GET /action`
 
-- `nodeIDs`: 指定 1 个或多个组件
-- `roles`: 按角色筛
-- `visibleOnly`: 只拿可见节点
-- `includeAncestors + ancestorDepth`: 沿 `parentID` 往上拿到顶或限定层数
-- `rect`: 按坐标范围拿节点
-- `nodeFields`: 只投影需要字段，避免把 AI 撑爆
-- `appStateKeys`: 只拿部分状态
+默认返回可执行目标与动作。
 
-`GET /events` 支持轮询增量：
-
-```text
-/events?after=12&limit=20&source=human,ai&id=increment_button
+```bash
+curl http://127.0.0.1:7879/action
+curl "http://127.0.0.1:7879/action?targetId=increment_button"
 ```
 
-返回里每条事件都有：
+返回示例：
 
-- `sequence`: 单调递增游标
-- `source`: `human / ai / system`
-- `kind`: `node / intent / custom`
-- `id / action / name`
-- `ok / message`
-- `metadata`
-
-业务代码可在真实用户点击/拖动后显式记一条：
-
-```swift
-shell.debugBridge.recordEvent(
-    source: "human",
-    kind: "node",
-    id: "increment_button",
-    action: "press",
-    message: "User pressed increment"
-)
-```
-
-经 `POST /action` 触发的操作会自动记事件；未显式传 `source` 时默认记成 `ai`。
-
-## 常见交互记录
-
-高频做法：
-
-- `Button` / 普通点击：`.debugNode(..., tapAction: "tap")`
-- 长按：`.debugNode(..., longPress: .init())`
-- 任意值变化：`.debugValueChange(id: "counter_text", value: store.counter, action: "counter_change")`
-- `Toggle` / `TextField` / `Picker` / `Stepper`：`shell.debugBridge.tracked($value, id: "username_field", action: "edit")`
-- 手写 closure：`shell.debugBridge.wrapNodeAction(id: "save_button", action: "press") { save() }`
-
-低侵入示例：
-
-```swift
-Toggle(
-    "Enabled",
-    isOn: shell.debugBridge.tracked(
-        $store.enabled,
-        id: "enabled_toggle",
-        action: "toggle"
-    )
-)
-
-TextField(
-    "Username",
-    text: shell.debugBridge.tracked(
-        $store.username,
-        id: "username_field",
-        action: "input"
-    )
-)
-```
-
-closure 包装示例：
-
-```swift
-Button(
-    "Save",
-    action: shell.debugBridge.wrapNodeAction(
-        id: "save_button",
-        action: "press"
-    ) {
-        shell.save()
+```json
+{
+  "summary": {
+    "targetCount": 2,
+    "actionCount": 2
+  },
+  "items": [
+    {
+      "targetId": "increment_button",
+      "targetType": "Button",
+      "screen": "DemoScreen",
+      "actions": [
+        {
+          "name": "press",
+          "args": [],
+          "summary": "trigger increment_button press",
+          "example": {
+            "action": "press",
+            "targetId": "increment_button"
+          }
+        }
+      ]
     }
-)
+  ]
+}
 ```
 
-若只想挂节点、不想顺带 tap/longPress：
+intent 也收口到这里：
 
-```swift
-.debugNodeStatic(
-    id: "sidebar_title",
-    role: "text",
-    label: "Sidebar title"
-)
+- `targetId = intent name`
+- `action = invoke`
+
+### `POST /action`
+
+统一执行入口。
+
+```bash
+curl -X POST http://127.0.0.1:7879/action \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "action": "press",
+    "targetId": "increment_button"
+  }'
 ```
 
-这层目的：默认 1 个 `.debugNode(...)` 吃掉节点 + 常见点击，其他场景尽量只碰 `debugBridge`，少直接碰 `registry`。
+返回示例：
+
+```json
+{
+  "accepted": true,
+  "message": "Pressed increment button",
+  "action": "press",
+  "targetId": "increment_button"
+}
+```
+
+调 intent：
+
+```json
+{
+  "action": "invoke",
+  "targetId": "increment_counter"
+}
+```
+
+### `GET /logs`
+
+默认返回 summary。
+
+```bash
+curl http://127.0.0.1:7879/logs
+```
+
+带 query 返回匹配日志：
+
+```bash
+curl "http://127.0.0.1:7879/logs?source=ai&targetId=increment_button&limit=10"
+```
+
+返回示例：
+
+```json
+{
+  "items": [
+    {
+      "seq": 1,
+      "time": "20260519-220014",
+      "source": "ai",
+      "level": "info",
+      "event": "press",
+      "targetId": "increment_button",
+      "summary": "accepted increment_button press",
+      "data": {
+        "accepted": "true"
+      }
+    }
+  ],
+  "nextAfterSeq": 1
+}
+```
+
+支持 query：
+
+- `event`
+- `level`
+- `source`
+- `targetId`
+- `screen`
+- `from`
+- `to`
+- `limit`
+- `keyword`
+
+### `DELETE /logs`
+
+清空已有日志。
+
+```bash
+curl -X DELETE http://127.0.0.1:7879/logs
+```
+
+返回示例：
+
+```json
+{
+  "accepted": true,
+  "message": "cleared 1 logs",
+  "clearedCount": 1
+}
+```
+
+### `GET /state`
+
+默认返回 `appState` key 摘要 + 已挂 targetState 的 target。
+
+```bash
+curl http://127.0.0.1:7879/state
+curl "http://127.0.0.1:7879/state?keys=counter&scope=app"
+curl "http://127.0.0.1:7879/state?targetId=increment_button&scope=target"
+```
+
+返回示例：
+
+```json
+{
+  "appState": {
+    "counter": "1"
+  }
+}
+```
+
+支持：
+
+- `keys`
+- `targetId`
+- `scope=app|target|branch`
+
+### `GET /snapshot`
+
+默认返回 tree summary。
+
+```bash
+curl http://127.0.0.1:7879/snapshot
+```
+
+带 query 返回 detail：
+
+```bash
+curl "http://127.0.0.1:7879/snapshot?targetId=increment_button&scope=self&fields=id,type,text,bounds,clickable"
+curl "http://127.0.0.1:7879/snapshot?targetId=increment_button&scope=branchToRoot&fields=id,type,text,bounds"
+curl "http://127.0.0.1:7879/snapshot?types=Button&clickable=true&limit=20"
+```
+
+返回示例：
+
+```json
+{
+  "screen": "DemoScreen",
+  "nodes": [
+    {
+      "id": "increment_button",
+      "type": "Button",
+      "text": "Increment counter button",
+      "clickable": true,
+      "bounds": {
+        "left": 331.5,
+        "top": 221,
+        "width": 77,
+        "height": 20
+      }
+    }
+  ]
+}
+```
+
+支持：
+
+- `targetId`
+- `scope=self|branchToRoot|subtree`
+- `depth`
+- `types`
+- `textKeyword`
+- `visible`
+- `enabled`
+- `clickable`
+- `fields`
+- `limit`

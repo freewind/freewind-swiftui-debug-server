@@ -2,76 +2,127 @@ import Foundation
 import Observation
 import SwiftUI
 
-// 对业务暴露的总入口。
 @Observable
 @MainActor
 public final class DebugBridge {
-    // 共享 registry，供 view 环境注入。
     public let registry = DebugRegistry()
-    // 当前 server。
+    public let appName: String
+    public let host: String
+
     private var server: DebugHTTPServer?
-    // 当前端口。
     public private(set) var port: UInt16?
-    // 启动状态说明。
     public private(set) var statusMessage: String = "Not started"
 
-    // 构造。
-    public init() {}
+    public init(appName: String = "App", host: String = "127.0.0.1") {
+        self.appName = appName
+        self.host = host
+    }
 
-    // 注册 intent。
     public func registerIntent(name: String, perform: @escaping @MainActor () -> DebugActionResponse) {
         registry.registerIntent(name: name, perform: perform)
     }
 
-    // 注册节点动作。
     public func registerNodeAction(id: String, action: String, perform: @escaping @MainActor () -> DebugActionResponse) {
         registry.registerNodeAction(id: id, action: action, perform: perform)
     }
 
-    // 启动 server。
-    public func start(port: UInt16, appState: @escaping @MainActor () -> [String: String]) {
+    public func publishTargetState(id: String, state: [String: String]) {
+        registry.publishTargetState(id: id, state: state)
+    }
+
+    public func clearTargetState(id: String) {
+        registry.clearTargetState(id: id)
+    }
+
+    public func start(
+        port: UInt16,
+        screenName: @escaping @MainActor () -> String = { "MainScreen" },
+        appState: @escaping @MainActor () -> [String: String]
+    ) {
         stop()
         self.port = port
+
         server = DebugHTTPServer(
             port: port,
-            getSnapshot: { [weak self] in
+            getHelp: { [weak self] in
                 await MainActor.run {
                     guard let self else {
-                        return DebugSnapshot(
-                            timestamp: ISO8601DateFormatter().string(from: Date()),
-                            appState: [:],
-                            nodeCount: 0,
-                            nodes: [],
-                            actionNames: []
+                        return DebugHelpResponse(
+                            appName: "Unknown",
+                            screenName: "Unknown",
+                            serverTime: debugTimestampString(),
+                            capabilities: [],
+                            counts: DebugHelpCounts(
+                                actionTargetCount: 0,
+                                logCount: 0,
+                                stateKeyCount: 0,
+                                snapshotNodeCount: 0
+                            ),
+                            endpoints: [],
+                            examples: []
                         )
                     }
-                    return self.registry.snapshot(appState: appState())
+                    let context = self.makeContext(screenName: screenName)
+                    return self.registry.help(context: context, appState: appState())
                 }
             },
-            querySnapshot: { [weak self] query in
+            getActionCatalog: { [weak self] query in
                 await MainActor.run {
                     guard let self else {
-                        return DebugSnapshotResponse(
-                            timestamp: ISO8601DateFormatter().string(from: Date()),
-                            totalNodeCount: 0,
-                            matchedNodeCount: 0
+                        return DebugActionCatalogResponse(
+                            summary: DebugActionCatalogSummary(targetCount: 0, actionCount: 0),
+                            items: []
                         )
                     }
-                    return self.registry.snapshot(appState: appState(), query: query)
+                    return self.registry.actionCatalog(
+                        context: self.makeContext(screenName: screenName),
+                        query: query
+                    )
                 }
             },
-            getEvents: { [weak self] query in
+            getLogs: { [weak self] query in
                 await MainActor.run {
                     guard let self else {
-                        return DebugEventResponse(nextSequence: 1, events: [])
+                        return DebugLogsResponse(summary: nil, items: [], nextAfterSeq: 0)
                     }
-                    return self.registry.events(query: query)
+                    return self.registry.logs(query: query)
+                }
+            },
+            clearLogs: { [weak self] in
+                await MainActor.run {
+                    guard let self else {
+                        return DebugLogsClearResponse(
+                            accepted: false,
+                            message: "DebugBridge deallocated",
+                            clearedCount: 0
+                        )
+                    }
+                    return self.registry.clearLogs()
+                }
+            },
+            getState: { [weak self] query in
+                await MainActor.run {
+                    guard let self else {
+                        return DebugStateResponse(summary: nil, appState: [:], targetState: nil)
+                    }
+                    return self.registry.state(appState: appState(), query: query)
+                }
+            },
+            getSnapshot: { [weak self] query in
+                await MainActor.run {
+                    guard let self else {
+                        return DebugSnapshotResponse(summary: nil, fieldCatalog: nil, examples: nil, screen: "Unknown", nodes: [])
+                    }
+                    return self.registry.snapshot(
+                        context: self.makeContext(screenName: screenName),
+                        query: query
+                    )
                 }
             },
             performAction: { [weak self] request in
                 await MainActor.run {
                     guard let self else {
-                        return .fail("DebugBridge deallocated")
+                        return DebugActionResponse.fail("DebugBridge deallocated")
                     }
                     return self.registry.perform(request: request)
                 }
@@ -80,20 +131,37 @@ public final class DebugBridge {
 
         do {
             try server?.start()
-            statusMessage = "Listening at http://127.0.0.1:\(port)"
+            statusMessage = "Listening at http://\(host):\(port)"
         } catch {
             statusMessage = "Start failed: \(error.localizedDescription)"
         }
     }
 
-    // 停止 server。
     public func stop() {
         server?.stop()
         server = nil
         port = nil
+        statusMessage = "Not started"
     }
 
-    // 显式记录人类或系统事件。
+    public func log(
+        event: String,
+        level: String = "info",
+        source: String = "system",
+        targetId: String? = nil,
+        summary: String,
+        data: [String: String] = [:]
+    ) {
+        registry.log(
+            event: event,
+            level: level,
+            source: source,
+            targetId: targetId,
+            summary: summary,
+            data: data
+        )
+    }
+
     public func recordEvent(
         source: String,
         kind: String,
@@ -116,7 +184,6 @@ public final class DebugBridge {
         )
     }
 
-    // 显式记录节点事件。
     public func recordNodeEvent(
         source: String = "human",
         id: String,
@@ -135,7 +202,6 @@ public final class DebugBridge {
         )
     }
 
-    // 显式记录值变化。
     public func recordValueChange(
         source: String = "human",
         id: String,
@@ -156,7 +222,6 @@ public final class DebugBridge {
         )
     }
 
-    // 包装常见人类操作。
     public func wrapNodeAction(
         source: String = "human",
         id: String,
@@ -173,7 +238,6 @@ public final class DebugBridge {
         )
     }
 
-    // 包装返回结果的操作。
     public func wrapNodeAction(
         source: String = "human",
         id: String,
@@ -190,7 +254,6 @@ public final class DebugBridge {
         )
     }
 
-    // 包装 Binding，减少业务侧直接碰 registry。
     public func tracked<Value>(
         _ binding: Binding<Value>,
         id: String,
@@ -206,6 +269,13 @@ public final class DebugBridge {
             source: source,
             metadata: metadata,
             describe: describe
+        )
+    }
+
+    private func makeContext(screenName: @escaping @MainActor () -> String) -> DebugServerContext {
+        DebugServerContext(
+            appName: appName,
+            screenName: screenName()
         )
     }
 }
