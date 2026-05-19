@@ -86,6 +86,14 @@ const snapshotScopeOptions = [
   { label: 'subtree', value: 'subtree' },
 ]
 
+function toOptions(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => !!value)))
+    .map((value) => ({
+      label: value,
+      value,
+    }))
+}
+
 function renderJson(value: unknown, maxHeight = 280) {
   return <JsonPreviewer value={value ?? {}} maxHeight={maxHeight} />
 }
@@ -360,21 +368,50 @@ const App: FC = () => {
   const [stateForm] = Form.useForm()
   const [snapshotForm] = Form.useForm()
 
-  const snapshotTypeOptions = Array.from(
-    new Set((snapshot?.nodes || []).map((item) => item.type).filter(Boolean))
-  ).map((item) => ({
-    label: item as string,
-    value: item as string,
-  }))
-  const logLevelOptions = Array.from(
-    new Set([
-      ...Object.keys(logs?.summary?.levelCounts || {}),
-      ...(logs?.items || []).map((item) => item.level).filter(Boolean),
-    ])
-  ).map((item) => ({
-    label: item,
-    value: item,
-  }))
+  const actionTargetIdOptions = toOptions([
+    ...(actions?.items || []).map((item) => item.targetId),
+    ...(stateData?.summary?.targetStateTargets || []),
+  ])
+  const actionNameOptions = toOptions(
+    (actions?.items || []).flatMap((item) => item.actions.map((action) => action.name))
+  )
+  const screenOptions = toOptions([
+    help?.screenName,
+    snapshot?.screen,
+    snapshot?.summary?.screen,
+    ...(actions?.items || []).map((item) => item.screen),
+    ...(logs?.items || []).map((item) => item.data?.screen),
+  ])
+  const logEventOptions = toOptions([
+    ...Object.keys(logs?.summary?.eventCountsTop || {}),
+    ...(logs?.items || []).map((item) => item.event),
+  ])
+  const logLevelOptions = toOptions([
+    ...Object.keys(logs?.summary?.levelCounts || {}),
+    ...(logs?.items || []).map((item) => item.level),
+  ])
+  const logSourceOptions = toOptions([
+    ...Object.keys(logs?.summary?.sourceCounts || {}),
+    ...(logs?.items || []).map((item) => item.source),
+  ])
+  const logTargetIdOptions = toOptions([
+    ...(logs?.items || []).map((item) => item.targetId),
+    ...(actions?.items || []).map((item) => item.targetId),
+  ])
+  const stateKeyOptions = toOptions(
+    (stateData?.summary?.appStateKeys || []).map((item) => item.key)
+  )
+  const stateTargetIdOptions = toOptions([
+    ...(stateData?.summary?.targetStateTargets || []),
+    ...(actions?.items || []).map((item) => item.targetId),
+  ])
+  const snapshotTargetIdOptions = toOptions([
+    ...(snapshot?.nodes || []).map((item) => item.id),
+    ...(actions?.items || []).map((item) => item.targetId),
+  ])
+  const snapshotTypeOptions = toOptions(
+    (snapshot?.nodes || []).map((item) => item.type)
+  )
 
   const actionColumns: ColumnsType<ActionCatalogResponse['items'][number]> = [
     {
@@ -564,22 +601,24 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={logsForm} layout="vertical" size="small">
-                        <Flex gap="small" wrap>
-                          <LabeledField name="event" label="event" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="level" label="level" className="query-cell"><Select {...commonSelectProps} allowClear options={logLevelOptions} /></LabeledField>
-                          <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="screen" label="screen" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="from" label="from" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="to" label="to" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="limit" label="limit" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
-                          <LabeledField name="keyword" label="keyword" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                        <Flex vertical gap="small">
+                          <Flex gap="small" wrap>
+                            <LabeledField name="event" label="event" className="query-cell"><Select {...commonSelectProps} allowClear options={logEventOptions} /></LabeledField>
+                            <LabeledField name="level" label="level" className="query-cell"><Select {...commonSelectProps} allowClear options={logLevelOptions} /></LabeledField>
+                            <LabeledField name="source" label="source" className="query-cell"><Select {...commonSelectProps} allowClear options={logSourceOptions} /></LabeledField>
+                            <LabeledField name="targetId" label="targetId" className="query-cell"><Select {...commonSelectProps} allowClear options={logTargetIdOptions} /></LabeledField>
+                            <LabeledField name="screen" label="screen" className="query-cell"><Select {...commonSelectProps} allowClear options={screenOptions} /></LabeledField>
+                            <LabeledField name="from" label="from" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                            <LabeledField name="to" label="to" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                            <LabeledField name="limit" label="limit" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                            <LabeledField name="keyword" label="keyword" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                          </Flex>
+                          <Space size={8} wrap>
+                            <Button size="small" type="primary" onClick={() => void loadLogs()}>Query Logs</Button>
+                            <Button size="small" onClick={() => void loadLogs({})}>Summary</Button>
+                            <Button size="small" danger onClick={() => void clearLogs()}>Delete Logs</Button>
+                          </Space>
                         </Flex>
-                        <Space size={8} wrap>
-                          <Button size="small" type="primary" onClick={() => void loadLogs()}>Query Logs</Button>
-                          <Button size="small" onClick={() => void loadLogs({})}>Summary</Button>
-                          <Button size="small" danger onClick={() => void clearLogs()}>Delete Logs</Button>
-                        </Space>
                       </Form>
                     </Card>
 
@@ -607,12 +646,14 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={actionQueryForm} layout="vertical" size="small">
-                        <Flex gap="small" wrap>
-                          <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="action" label="action" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="screen" label="screen" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                        <Flex vertical gap="small">
+                          <Flex gap="small" wrap>
+                            <LabeledField name="targetId" label="targetId" className="query-cell"><Select {...commonSelectProps} allowClear options={actionTargetIdOptions} /></LabeledField>
+                            <LabeledField name="action" label="action" className="query-cell"><Select {...commonSelectProps} allowClear options={actionNameOptions} /></LabeledField>
+                            <LabeledField name="screen" label="screen" className="query-cell"><Select {...commonSelectProps} allowClear options={screenOptions} /></LabeledField>
+                          </Flex>
+                          <Button size="small" type="primary" onClick={() => void loadActions()}>Load Actions</Button>
                         </Flex>
-                        <Button size="small" type="primary" onClick={() => void loadActions()}>Load Actions</Button>
                       </Form>
                     </Card>
 
@@ -633,18 +674,20 @@ const App: FC = () => {
 
                     <Card size="small" title="Manual Action">
                       <Form form={manualActionForm} layout="vertical" size="small">
-                        <Flex gap="small" wrap>
-                          <LabeledField name="action" label="action" className="query-cell" rules={[{ required: true }]}><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="targetId" label="targetId" className="query-cell" rules={[{ required: true }]}><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="text" label="text" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="dx" label="dx" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
-                          <LabeledField name="dy" label="dy" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                        <Flex vertical gap="small">
+                          <Flex gap="small" wrap>
+                            <LabeledField name="action" label="action" className="query-cell" rules={[{ required: true }]}><Select {...commonSelectProps} options={actionNameOptions} /></LabeledField>
+                            <LabeledField name="targetId" label="targetId" className="query-cell" rules={[{ required: true }]}><Select {...commonSelectProps} options={actionTargetIdOptions} /></LabeledField>
+                            <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                            <LabeledField name="text" label="text" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                            <LabeledField name="dx" label="dx" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                            <LabeledField name="dy" label="dy" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                          </Flex>
+                          <LabeledField name="args" label="args JSON"><Input.TextArea rows={4} /></LabeledField>
+                          <Space size={8}>
+                            <Button size="small" type="primary" onClick={() => void runManualAction()}>Send Action</Button>
+                          </Space>
                         </Flex>
-                        <LabeledField name="args" label="args JSON"><Input.TextArea rows={4} /></LabeledField>
-                        <Space size={8}>
-                          <Button size="small" type="primary" onClick={() => void runManualAction()}>Send Action</Button>
-                        </Space>
                       </Form>
                     </Card>
 
@@ -661,15 +704,17 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={stateForm} layout="vertical" size="small">
-                        <Flex gap="small" wrap>
-                          <LabeledField name="keys" label="keys" className="query-cell"><Input size="small" style={compactInputStyle} placeholder="counter,enabled" /></LabeledField>
-                          <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={stateScopeOptions} /></LabeledField>
+                        <Flex vertical gap="small">
+                          <Flex gap="small" wrap>
+                            <LabeledField name="keys" label="keys" className="query-cell query-cell--wide"><Select {...commonSelectProps} mode="multiple" allowClear options={stateKeyOptions} /></LabeledField>
+                            <LabeledField name="targetId" label="targetId" className="query-cell"><Select {...commonSelectProps} allowClear options={stateTargetIdOptions} /></LabeledField>
+                            <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={stateScopeOptions} /></LabeledField>
+                          </Flex>
+                          <Space size={8}>
+                            <Button size="small" type="primary" onClick={() => void loadState()}>Query State</Button>
+                            <Button size="small" onClick={() => void loadState({})}>Summary</Button>
+                          </Space>
                         </Flex>
-                        <Space size={8}>
-                          <Button size="small" type="primary" onClick={() => void loadState()}>Query State</Button>
-                          <Button size="small" onClick={() => void loadState({})}>Summary</Button>
-                        </Space>
                       </Form>
                     </Card>
 
@@ -686,21 +731,23 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={snapshotForm} layout="vertical" size="small">
-                        <Flex gap="small" wrap>
-                          <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={snapshotScopeOptions} /></LabeledField>
-                          <LabeledField name="depth" label="depth" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
-                          <LabeledField name="types" label="types" className="query-cell query-cell--wide"><Select {...commonSelectProps} mode="multiple" allowClear options={snapshotTypeOptions} /></LabeledField>
-                          <LabeledField name="textKeyword" label="textKeyword" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="visible" label="visible" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
-                          <LabeledField name="enabled" label="enabled" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
-                          <LabeledField name="clickable" label="clickable" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
-                          <LabeledField name="limit" label="limit" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                        <Flex vertical gap="small">
+                          <Flex gap="small" wrap>
+                            <LabeledField name="targetId" label="targetId" className="query-cell"><Select {...commonSelectProps} allowClear options={snapshotTargetIdOptions} /></LabeledField>
+                            <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={snapshotScopeOptions} /></LabeledField>
+                            <LabeledField name="depth" label="depth" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                            <LabeledField name="types" label="types" className="query-cell query-cell--wide"><Select {...commonSelectProps} mode="multiple" allowClear options={snapshotTypeOptions} /></LabeledField>
+                            <LabeledField name="textKeyword" label="textKeyword" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                            <LabeledField name="visible" label="visible" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
+                            <LabeledField name="enabled" label="enabled" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
+                            <LabeledField name="clickable" label="clickable" className="query-cell"><Select {...commonSelectProps} allowClear options={triStateOptions} /></LabeledField>
+                            <LabeledField name="limit" label="limit" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
+                          </Flex>
+                          <Space size={8}>
+                            <Button size="small" type="primary" onClick={() => void loadSnapshot()}>Query Snapshot</Button>
+                            <Button size="small" onClick={() => void loadSnapshotSummary()}>Summary</Button>
+                          </Space>
                         </Flex>
-                        <Space size={8}>
-                          <Button size="small" type="primary" onClick={() => void loadSnapshot()}>Query Snapshot</Button>
-                          <Button size="small" onClick={() => void loadSnapshotSummary()}>Summary</Button>
-                        </Space>
                       </Form>
                     </Card>
 
