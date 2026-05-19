@@ -1,6 +1,66 @@
 import AppKit
 import SwiftUI
 
+// 点击后记一条节点事件。
+private struct DebugTapRecorderModifier: ViewModifier {
+    let id: String
+    let action: String
+    let source: String
+    let metadata: [String: String]
+    @Environment(DebugRegistry.self) private var registry
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            TapGesture().onEnded {
+                registry.recordNodeEvent(source: source, id: id, action: action, metadata: metadata)
+            }
+        )
+    }
+}
+
+// 长按后记一条节点事件。
+private struct DebugLongPressRecorderModifier: ViewModifier {
+    let id: String
+    let action: String
+    let source: String
+    let minimumDuration: Double
+    let metadata: [String: String]
+    @Environment(DebugRegistry.self) private var registry
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            LongPressGesture(minimumDuration: minimumDuration).onEnded { _ in
+                registry.recordNodeEvent(source: source, id: id, action: action, metadata: metadata)
+            }
+        )
+    }
+}
+
+// 任意 Equatable 值变化时记日志。
+private struct DebugValueChangeModifier<Value: Equatable>: ViewModifier {
+    let id: String
+    let value: Value
+    let action: String
+    let source: String
+    let metadata: [String: String]
+    let describe: (Value) -> String
+    @Environment(DebugRegistry.self) private var registry
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: value) { oldValue, newValue in
+                registry.recordValueChange(
+                    source: source,
+                    id: id,
+                    action: action,
+                    oldValue: describe(oldValue),
+                    newValue: describe(newValue),
+                    metadata: metadata
+                )
+            }
+    }
+}
+
 // 透明追踪视图，负责回传 frame 与销毁事件。
 final class DebugTrackingView: NSView {
     // 当前节点 id。
@@ -172,6 +232,94 @@ public extension View {
                 label: label,
                 actions: actions
             )
+        )
+    }
+
+    // 记录常见 tap。
+    func debugTapAction(
+        id: String,
+        action: String = "tap",
+        source: String = "human",
+        metadata: [String: String] = [:]
+    ) -> some View {
+        modifier(
+            DebugTapRecorderModifier(
+                id: id,
+                action: action,
+                source: source,
+                metadata: metadata
+            )
+        )
+    }
+
+    // 记录常见 long press。
+    func debugLongPressAction(
+        id: String,
+        action: String = "long_press",
+        source: String = "human",
+        minimumDuration: Double = 0.5,
+        metadata: [String: String] = [:]
+    ) -> some View {
+        modifier(
+            DebugLongPressRecorderModifier(
+                id: id,
+                action: action,
+                source: source,
+                minimumDuration: minimumDuration,
+                metadata: metadata
+            )
+        )
+    }
+
+    // 记录任意状态变化。
+    func debugValueChange<Value: Equatable>(
+        id: String,
+        value: Value,
+        action: String = "change",
+        source: String = "human",
+        metadata: [String: String] = [:],
+        describe: @escaping (Value) -> String = { String(describing: $0) }
+    ) -> some View {
+        modifier(
+            DebugValueChangeModifier(
+                id: id,
+                value: value,
+                action: action,
+                source: source,
+                metadata: metadata,
+                describe: describe
+            )
+        )
+    }
+}
+
+public extension Binding {
+    // 包装 Binding，适合 Toggle / TextField / Picker / Stepper。
+    func debugTracked(
+        by registry: DebugRegistry,
+        id: String,
+        action: String = "change",
+        source: String = "human",
+        metadata: [String: String] = [:],
+        describe: @escaping (Value) -> String = { String(describing: $0) }
+    ) -> Binding<Value> {
+        let base = self
+        return Binding(
+            get: {
+                base.wrappedValue
+            },
+            set: { newValue in
+                let oldValue = base.wrappedValue
+                base.wrappedValue = newValue
+                registry.recordValueChange(
+                    source: source,
+                    id: id,
+                    action: action,
+                    oldValue: describe(oldValue),
+                    newValue: describe(newValue),
+                    metadata: metadata
+                )
+            }
         )
     }
 }

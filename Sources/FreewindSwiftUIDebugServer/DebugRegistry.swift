@@ -127,6 +127,88 @@ public final class DebugRegistry {
         }
     }
 
+    // 记录节点事件，默认视为人类交互。
+    public func recordNodeEvent(
+        source: String = "human",
+        id: String,
+        action: String,
+        ok: Bool? = nil,
+        message: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        recordEvent(
+            source: source,
+            kind: "node",
+            id: id,
+            action: action,
+            ok: ok,
+            message: message,
+            metadata: metadata
+        )
+    }
+
+    // 记录值变化，自动附上前后值。
+    public func recordValueChange(
+        source: String = "human",
+        id: String,
+        action: String = "change",
+        oldValue: String? = nil,
+        newValue: String? = nil,
+        message: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        var payload = metadata
+        if let oldValue {
+            payload["from"] = oldValue
+        }
+        if let newValue {
+            payload["to"] = newValue
+        }
+        recordNodeEvent(
+            source: source,
+            id: id,
+            action: action,
+            message: message,
+            metadata: payload
+        )
+    }
+
+    // 包装无返回值动作，先记日志再执行。
+    public func wrapNodeAction(
+        source: String = "human",
+        id: String,
+        action: String,
+        metadata: [String: String] = [:],
+        perform: @escaping @MainActor () -> Void
+    ) -> @MainActor () -> Void {
+        { [weak self] in
+            self?.recordNodeEvent(source: source, id: id, action: action, metadata: metadata)
+            perform()
+        }
+    }
+
+    // 包装返回 DebugActionResponse 的动作，日志带结果。
+    public func wrapNodeAction(
+        source: String = "human",
+        id: String,
+        action: String,
+        metadata: [String: String] = [:],
+        perform: @escaping @MainActor () -> DebugActionResponse
+    ) -> @MainActor () -> DebugActionResponse {
+        { [weak self] in
+            let result = perform()
+            self?.recordNodeEvent(
+                source: source,
+                id: id,
+                action: action,
+                ok: result.ok,
+                message: result.message,
+                metadata: metadata
+            )
+            return result
+        }
+    }
+
     // 拉取最近事件。
     public func events(query: DebugEventQuery) -> DebugEventResponse {
         let limited = events
