@@ -361,32 +361,84 @@ public extension View {
     }
 }
 
+@MainActor
+private final class DebugTrackedBindingBox<Value>: @unchecked Sendable {
+    var base: Binding<Value>
+    let registry: DebugRegistry
+    let id: String
+    let action: String
+    let source: String
+    let metadata: [String: String]
+    let describe: @Sendable (Value) -> String
+
+    init(
+        base: Binding<Value>,
+        registry: DebugRegistry,
+        id: String,
+        action: String,
+        source: String,
+        metadata: [String: String],
+        describe: @escaping @Sendable (Value) -> String
+    ) {
+        self.base = base
+        self.registry = registry
+        self.id = id
+        self.action = action
+        self.source = source
+        self.metadata = metadata
+        self.describe = describe
+    }
+
+    func get() -> Value {
+        base.wrappedValue
+    }
+
+    func set(_ newValue: Value) {
+        let oldValue = base.wrappedValue
+        base.wrappedValue = newValue
+        registry.recordValueChange(
+            source: source,
+            id: id,
+            action: action,
+            oldValue: describe(oldValue),
+            newValue: describe(newValue),
+            metadata: metadata
+        )
+    }
+}
+
 public extension Binding {
     // 包装 Binding，适合 Toggle / TextField / Picker / Stepper。
+    @MainActor
     func debugTracked(
         by registry: DebugRegistry,
         id: String,
         action: String = "change",
         source: String = "human",
         metadata: [String: String] = [:],
-        describe: @escaping (Value) -> String = { String(describing: $0) }
+        describe: @escaping @Sendable (Value) -> String = { String(describing: $0) }
     ) -> Binding<Value> {
-        let base = self
+        let box = DebugTrackedBindingBox(
+            base: self,
+            registry: registry,
+            id: id,
+            action: action,
+            source: source,
+            metadata: metadata,
+            describe: describe
+        )
         return Binding(
             get: {
-                base.wrappedValue
+                var value: Value!
+                MainActor.assumeIsolated {
+                    value = box.get()
+                }
+                return value
             },
             set: { newValue in
-                let oldValue = base.wrappedValue
-                base.wrappedValue = newValue
-                registry.recordValueChange(
-                    source: source,
-                    id: id,
-                    action: action,
-                    oldValue: describe(oldValue),
-                    newValue: describe(newValue),
-                    metadata: metadata
-                )
+                MainActor.assumeIsolated {
+                    box.set(newValue)
+                }
             }
         )
     }

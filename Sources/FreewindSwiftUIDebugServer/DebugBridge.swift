@@ -197,7 +197,7 @@ public final class DebugBridge {
         action: String = "change",
         source: String = "human",
         metadata: [String: String] = [:],
-        describe: @escaping (Value) -> String = { String(describing: $0) }
+        describe: @escaping @Sendable (Value) -> String = { String(describing: $0) }
     ) -> Binding<Value> {
         binding.debugTracked(
             by: registry,
