@@ -55,6 +55,8 @@ const compactNumberStyle = { width: '100%' } as const
 const compactSelectStyle = { width: '100%' } as const
 const commonSelectProps = {
   popupMatchSelectWidth: false,
+  optionFilterProp: 'label' as const,
+  showSearch: true,
   size: 'small' as const,
   style: compactSelectStyle,
 }
@@ -367,14 +369,28 @@ const App: FC = () => {
   const [logsForm] = Form.useForm()
   const [stateForm] = Form.useForm()
   const [snapshotForm] = Form.useForm()
+  const actionQueryTargetId = Form.useWatch('targetId', actionQueryForm)
+  const actionQueryAction = Form.useWatch('action', actionQueryForm)
+  const manualActionTargetId = Form.useWatch('targetId', manualActionForm)
+  const manualActionAction = Form.useWatch('action', manualActionForm)
 
   const actionTargetIdOptions = toOptions([
     ...(actions?.items || []).map((item) => item.targetId),
     ...(stateData?.summary?.targetStateTargets || []),
   ])
+  const actionsByTargetId = (actions?.items || []).reduce<Record<string, string[]>>((result, item) => {
+    result[item.targetId] = item.actions.map((action) => action.name)
+    return result
+  }, {})
   const actionNameOptions = toOptions(
     (actions?.items || []).flatMap((item) => item.actions.map((action) => action.name))
   )
+  const actionQueryActionOptions = actionQueryTargetId
+    ? toOptions(actionsByTargetId[actionQueryTargetId] || [])
+    : actionNameOptions
+  const manualActionOptions = manualActionTargetId
+    ? toOptions(actionsByTargetId[manualActionTargetId] || [])
+    : actionNameOptions
   const screenOptions = toOptions([
     help?.screenName,
     snapshot?.screen,
@@ -558,6 +574,26 @@ const App: FC = () => {
     void refreshAll()
   }, [])
 
+  useEffect(() => {
+    if (!actionQueryAction) {
+      return
+    }
+    const matched = actionQueryActionOptions.some((item) => item.value === actionQueryAction)
+    if (!matched) {
+      actionQueryForm.setFieldValue('action', undefined)
+    }
+  }, [actionQueryAction, actionQueryActionOptions, actionQueryForm])
+
+  useEffect(() => {
+    if (!manualActionAction) {
+      return
+    }
+    const matched = manualActionOptions.some((item) => item.value === manualActionAction)
+    if (!matched) {
+      manualActionForm.setFieldValue('action', undefined)
+    }
+  }, [manualActionAction, manualActionForm, manualActionOptions])
+
   return (
     <Layout>
       <Header style={{ background: '#fff', borderBottom: '1px solid #f0f0f0', paddingInline: 16, height: 56 }}>
@@ -649,7 +685,7 @@ const App: FC = () => {
                         <Flex vertical gap="small">
                           <Flex gap="small" wrap>
                             <LabeledField name="targetId" label="targetId" className="query-cell"><Select {...commonSelectProps} allowClear options={actionTargetIdOptions} /></LabeledField>
-                            <LabeledField name="action" label="action" className="query-cell"><Select {...commonSelectProps} allowClear options={actionNameOptions} /></LabeledField>
+                            <LabeledField name="action" label="action" className="query-cell"><Select {...commonSelectProps} allowClear options={actionQueryActionOptions} /></LabeledField>
                             <LabeledField name="screen" label="screen" className="query-cell"><Select {...commonSelectProps} allowClear options={screenOptions} /></LabeledField>
                           </Flex>
                           <Button size="small" type="primary" onClick={() => void loadActions()}>Load Actions</Button>
@@ -676,8 +712,8 @@ const App: FC = () => {
                       <Form form={manualActionForm} layout="vertical" size="small">
                         <Flex vertical gap="small">
                           <Flex gap="small" wrap>
-                            <LabeledField name="action" label="action" className="query-cell" rules={[{ required: true }]}><Select {...commonSelectProps} options={actionNameOptions} /></LabeledField>
                             <LabeledField name="targetId" label="targetId" className="query-cell" rules={[{ required: true }]}><Select {...commonSelectProps} options={actionTargetIdOptions} /></LabeledField>
+                            <LabeledField name="action" label="action" className="query-cell" rules={[{ required: true }]}><Select {...commonSelectProps} options={manualActionOptions} /></LabeledField>
                             <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                             <LabeledField name="text" label="text" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                             <LabeledField name="dx" label="dx" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
