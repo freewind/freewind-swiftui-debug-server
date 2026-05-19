@@ -366,6 +366,15 @@ const App: FC = () => {
     label: item as string,
     value: item as string,
   }))
+  const logLevelOptions = Array.from(
+    new Set([
+      ...Object.keys(logs?.summary?.levelCounts || {}),
+      ...(logs?.items || []).map((item) => item.level).filter(Boolean),
+    ])
+  ).map((item) => ({
+    label: item,
+    value: item,
+  }))
 
   const actionColumns: ColumnsType<ActionCatalogResponse['items'][number]> = [
     {
@@ -555,9 +564,9 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={logsForm} layout="vertical" size="small">
-                        <Flex gap={8} wrap>
+                        <Flex gap="small" wrap>
                           <LabeledField name="event" label="event" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
-                          <LabeledField name="level" label="level" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
+                          <LabeledField name="level" label="level" className="query-cell"><Select {...commonSelectProps} allowClear options={logLevelOptions} /></LabeledField>
                           <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="screen" label="screen" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
@@ -598,7 +607,7 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={actionQueryForm} layout="vertical" size="small">
-                        <Flex gap={8} wrap>
+                        <Flex gap="small" wrap>
                           <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="action" label="action" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="screen" label="screen" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
@@ -624,7 +633,7 @@ const App: FC = () => {
 
                     <Card size="small" title="Manual Action">
                       <Form form={manualActionForm} layout="vertical" size="small">
-                        <Flex gap={8} wrap>
+                        <Flex gap="small" wrap>
                           <LabeledField name="action" label="action" className="query-cell" rules={[{ required: true }]}><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="targetId" label="targetId" className="query-cell" rules={[{ required: true }]}><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="source" label="source" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
@@ -652,7 +661,7 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={stateForm} layout="vertical" size="small">
-                        <Flex gap={8} wrap>
+                        <Flex gap="small" wrap>
                           <LabeledField name="keys" label="keys" className="query-cell"><Input size="small" style={compactInputStyle} placeholder="counter,enabled" /></LabeledField>
                           <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={stateScopeOptions} /></LabeledField>
@@ -677,7 +686,7 @@ const App: FC = () => {
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <Card size="small" title="Query">
                       <Form form={snapshotForm} layout="vertical" size="small">
-                        <Flex gap={8} wrap>
+                        <Flex gap="small" wrap>
                           <LabeledField name="targetId" label="targetId" className="query-cell"><Input size="small" style={compactInputStyle} /></LabeledField>
                           <LabeledField name="scope" label="scope" className="query-cell"><Select {...commonSelectProps} allowClear options={snapshotScopeOptions} /></LabeledField>
                           <LabeledField name="depth" label="depth" className="query-cell query-cell--number"><InputNumber size="small" style={compactNumberStyle} /></LabeledField>
