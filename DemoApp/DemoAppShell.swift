@@ -30,7 +30,7 @@ final class DemoAppShell {
             return .ok("Pressed increment button")
         }
 
-        debugBridge.start(port: 7878) { [weak self] in
+        debugBridge.start(port: 7879) { [weak self] in
             guard let self else {
                 return [:]
             }
