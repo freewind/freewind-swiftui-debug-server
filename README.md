@@ -12,6 +12,7 @@
 
 当前协议已对齐 Android 版的核心心智：
 
+- `GET /meta`
 - `GET /help`
 - `GET /action`
 - `POST /action`
@@ -22,7 +23,8 @@
 
 说明：
 
-- `GET /` 的 html console 先保留，暂未实现
+- 协议 source of truth 在 `/Users/peng.li/workspace/freewind-debug-bridge-web/src/api-spec.ts`
+- 独立调试台实现在 `/Users/peng.li/workspace/freewind-debug-bridge-web`
 - 这是“已注册关键节点”模型，不是自动穷举 SwiftUI 私有 view tree
 - 推荐只在 `DEBUG` / 本机开发启用
 
@@ -97,12 +99,22 @@ struct ContentView: View {
 }
 ```
 
-## endpoint
+## endpoint 示例
+
+字段名、query、返回 shape 以 `/Users/peng.li/workspace/freewind-debug-bridge-web/src/api-spec.ts` 为准。
 
 基址：
 
 ```text
 http://127.0.0.1:7879
+```
+
+### `GET /meta`
+
+返回 app 标识与 buildVersion。
+
+```bash
+curl http://127.0.0.1:7879/meta
 ```
 
 ### `GET /help`
@@ -213,6 +225,7 @@ curl -X POST http://127.0.0.1:7879/action \
 - action handler 统一收 `DebugActionRequest`
 - `text` 适合 text field / rename / send
 - `args` 适合结构化小参数，如 `{"value":"true"}`
+- `source` 可显式传 `ai|human|system`
 
 调 intent：
 

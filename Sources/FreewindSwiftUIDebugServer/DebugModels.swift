@@ -58,8 +58,18 @@ public struct DebugServerContext: Sendable {
     }
 }
 
+public struct DebugMetaResponse: Codable, Sendable {
+    public let appName: String
+    public let buildVersion: Int
+
+    public init(appName: String, buildVersion: Int) {
+        self.appName = appName
+        self.buildVersion = buildVersion
+    }
+}
+
 // 外部动作请求。
-// 这里是 server ↔ web console 的协议面；字段/语义变更时，需同步 DebugConsoleWeb/src/types.ts 与 DebugConsoleWeb/src/App.tsx。
+// 这里是 server ↔ 独立协议仓 的协议面；字段/语义变更时，需同步 freewind-debug-bridge-web 与 openapi 契约。
 public struct DebugActionRequest: Codable, Sendable {
     public let action: String
     public let targetId: String
@@ -94,25 +104,60 @@ public struct DebugActionResponse: Codable, Sendable {
     public let message: String
     public let action: String?
     public let targetId: String?
+    public let errorType: String?
+    public let timedOut: Bool?
+    public let durationMs: Int?
 
     public init(
         accepted: Bool,
         message: String,
         action: String? = nil,
-        targetId: String? = nil
+        targetId: String? = nil,
+        errorType: String? = nil,
+        timedOut: Bool? = nil,
+        durationMs: Int? = nil
     ) {
         self.accepted = accepted
         self.message = message
         self.action = action
         self.targetId = targetId
+        self.errorType = errorType
+        self.timedOut = timedOut
+        self.durationMs = durationMs
     }
 
-    public static func ok(_ message: String) -> Self {
-        Self(accepted: true, message: message)
+    public static func ok(
+        _ message: String,
+        action: String? = nil,
+        targetId: String? = nil,
+        durationMs: Int? = nil
+    ) -> Self {
+        Self(
+            accepted: true,
+            message: message,
+            action: action,
+            targetId: targetId,
+            durationMs: durationMs
+        )
     }
 
-    public static func fail(_ message: String) -> Self {
-        Self(accepted: false, message: message)
+    public static func fail(
+        _ message: String,
+        action: String? = nil,
+        targetId: String? = nil,
+        errorType: String? = nil,
+        timedOut: Bool? = nil,
+        durationMs: Int? = nil
+    ) -> Self {
+        Self(
+            accepted: false,
+            message: message,
+            action: action,
+            targetId: targetId,
+            errorType: errorType,
+            timedOut: timedOut,
+            durationMs: durationMs
+        )
     }
 }
 
@@ -506,10 +551,13 @@ public struct DebugSnapshotNodePayload: Codable, Sendable, Identifiable {
     public let type: String?
     public let text: String?
     public let role: String?
+    public let backgroundColor: String?
+    public let contentColor: String?
     public let visible: Bool?
     public let enabled: Bool?
     public let clickable: Bool?
     public let value: String?
+    public let extra: [String: String]?
     public let bounds: DebugBounds?
 
     public init(
@@ -518,10 +566,13 @@ public struct DebugSnapshotNodePayload: Codable, Sendable, Identifiable {
         type: String? = nil,
         text: String? = nil,
         role: String? = nil,
+        backgroundColor: String? = nil,
+        contentColor: String? = nil,
         visible: Bool? = nil,
         enabled: Bool? = nil,
         clickable: Bool? = nil,
         value: String? = nil,
+        extra: [String: String]? = nil,
         bounds: DebugBounds? = nil
     ) {
         self.id = id
@@ -529,10 +580,13 @@ public struct DebugSnapshotNodePayload: Codable, Sendable, Identifiable {
         self.type = type
         self.text = text
         self.role = role
+        self.backgroundColor = backgroundColor
+        self.contentColor = contentColor
         self.visible = visible
         self.enabled = enabled
         self.clickable = clickable
         self.value = value
+        self.extra = extra
         self.bounds = bounds
     }
 }
@@ -631,4 +685,22 @@ public func debugTimestampString(_ date: Date = Date()) -> String {
     formatter.timeZone = .current
     formatter.dateFormat = "yyyyMMdd-HHmmss"
     return formatter.string(from: date)
+}
+
+public func debugBundleBuildVersion(bundle: Bundle = .main) -> Int {
+    if let number = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? NSNumber {
+        return number.intValue
+    }
+
+    if let string = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+        let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Int(normalized) {
+            return value
+        }
+        if let head = normalized.split(separator: ".").first, let value = Int(head) {
+            return value
+        }
+    }
+
+    return 0
 }

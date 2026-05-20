@@ -1,8 +1,6 @@
 import Foundation
 import Network
 
-private final class WebConsoleBundleToken: NSObject {}
-
 private struct HTTPRequest {
     let method: String
     let path: String
@@ -12,6 +10,7 @@ private struct HTTPRequest {
 
 final class DebugHTTPServer: @unchecked Sendable {
     private let port: UInt16
+    private let getMeta: @Sendable () async -> DebugMetaResponse
     private let getHelp: @Sendable () async -> DebugHelpResponse
     private let getActionCatalog: @Sendable (DebugActionCatalogQuery) async -> DebugActionCatalogResponse
     private let getLogs: @Sendable (DebugLogsQuery) async -> DebugLogsResponse
@@ -23,6 +22,7 @@ final class DebugHTTPServer: @unchecked Sendable {
 
     init(
         port: UInt16,
+        getMeta: @escaping @Sendable () async -> DebugMetaResponse,
         getHelp: @escaping @Sendable () async -> DebugHelpResponse,
         getActionCatalog: @escaping @Sendable (DebugActionCatalogQuery) async -> DebugActionCatalogResponse,
         getLogs: @escaping @Sendable (DebugLogsQuery) async -> DebugLogsResponse,
@@ -32,6 +32,7 @@ final class DebugHTTPServer: @unchecked Sendable {
         performAction: @escaping @Sendable (DebugActionRequest) async -> DebugActionResponse
     ) {
         self.port = port
+        self.getMeta = getMeta
         self.getHelp = getHelp
         self.getActionCatalog = getActionCatalog
         self.getLogs = getLogs
@@ -70,7 +71,8 @@ final class DebugHTTPServer: @unchecked Sendable {
         } catch {
             let response = jsonErrorResponse(
                 status: "500 Internal Server Error",
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                errorType: "server_error"
             )
             try? await send(response, to: connection)
         }
@@ -152,11 +154,9 @@ final class DebugHTTPServer: @unchecked Sendable {
     }
 
     private func route(_ request: HTTPRequest) async throws -> Data {
-        if let staticResponse = try staticResponse(for: request.path) {
-            return staticResponse
-        }
-
         switch (request.method, request.path) {
+        case ("GET", "/meta"):
+            return try jsonResponse(status: "200 OK", body: await getMeta())
         case ("GET", "/help"):
             return try jsonResponse(status: "200 OK", body: await getHelp())
         case ("GET", "/action"):
@@ -165,7 +165,16 @@ final class DebugHTTPServer: @unchecked Sendable {
                 body: await getActionCatalog(actionQuery(from: request.url))
             )
         case ("POST", "/action"):
-            let actionRequest = try JSONDecoder().decode(DebugActionRequest.self, from: request.body)
+            let actionRequest: DebugActionRequest
+            do {
+                actionRequest = try JSONDecoder().decode(DebugActionRequest.self, from: request.body)
+            } catch {
+                return jsonErrorResponse(
+                    status: "400 Bad Request",
+                    message: "invalid action request",
+                    errorType: "bad_request"
+                )
+            }
             let result = await performAction(actionRequest)
             return try jsonResponse(
                 status: result.accepted ? "200 OK" : "400 Bad Request",
@@ -189,45 +198,12 @@ final class DebugHTTPServer: @unchecked Sendable {
                 body: await getSnapshot(snapshotQuery(from: request.url))
             )
         default:
-            return jsonErrorResponse(status: "404 Not Found", message: "not found")
-        }
-    }
-
-    private func staticResponse(for path: String) throws -> Data? {
-        let rootURL = webConsoleRootURL
-        let relativePath = path == "/" ? "index.html" : String(path.drop(while: { $0 == "/" }))
-        guard !relativePath.isEmpty else {
-            return nil
-        }
-
-        let fileURL = rootURL.appendingPathComponent(relativePath)
-        let standardizedRoot = rootURL.standardizedFileURL.path
-        let standardizedFile = fileURL.standardizedFileURL.path
-        guard standardizedFile.hasPrefix(standardizedRoot) else {
-            return textResponse(
-                status: "400 Bad Request",
-                contentType: "text/plain; charset=utf-8",
-                body: "invalid asset path"
+            return jsonErrorResponse(
+                status: "404 Not Found",
+                message: "not found",
+                errorType: "not_found"
             )
         }
-
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            if path == "/" {
-                return textResponse(
-                    status: "503 Service Unavailable",
-                    contentType: "text/plain; charset=utf-8",
-                    body: "web console assets missing; run pnpm build in DebugConsoleWeb"
-                )
-            }
-            return nil
-        }
-
-        let data = try Data(contentsOf: fileURL)
-        return httpResponse(
-            status: "200 OK",
-            contentType: contentType(for: fileURL.pathExtension),
-            bodyData: data
-        )
     }
 
     private func actionQuery(from url: URL?) -> DebugActionCatalogQuery {
@@ -342,12 +318,21 @@ final class DebugHTTPServer: @unchecked Sendable {
         )
     }
 
-    private func jsonErrorResponse(status: String, message: String) -> Data {
-        let body = #"{"accepted":false,"message":"\#(message)"}"#
-        return textResponse(
+    private func jsonErrorResponse(
+        status: String,
+        message: String,
+        errorType: String? = nil
+    ) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let bodyData = (try? encoder.encode(
+            DebugActionResponse.fail(message, errorType: errorType)
+        )) ?? Data(#"{"accepted":false,"message":"request failed"}"#.utf8)
+
+        return httpResponse(
             status: status,
             contentType: "application/json; charset=utf-8",
-            body: body
+            bodyData: bodyData
         )
     }
 
@@ -371,49 +356,4 @@ final class DebugHTTPServer: @unchecked Sendable {
         return Data(header.utf8) + bodyData
     }
 
-    private func contentType(for pathExtension: String) -> String {
-        switch pathExtension.lowercased() {
-        case "html":
-            return "text/html; charset=utf-8"
-        case "js":
-            return "application/javascript; charset=utf-8"
-        case "css":
-            return "text/css; charset=utf-8"
-        case "json":
-            return "application/json; charset=utf-8"
-        case "svg":
-            return "image/svg+xml"
-        case "png":
-            return "image/png"
-        case "jpg", "jpeg":
-            return "image/jpeg"
-        case "ico":
-            return "image/x-icon"
-        default:
-            return "application/octet-stream"
-        }
-    }
-
-    private var webConsoleRootURL: URL {
-        #if SWIFT_PACKAGE
-        if let bundledURL = Bundle.module.resourceURL?.appendingPathComponent("WebConsoleDist", isDirectory: true),
-            FileManager.default.fileExists(atPath: bundledURL.path)
-        {
-            return bundledURL
-        }
-        #endif
-
-        if let bundledURL = Bundle(for: WebConsoleBundleToken.self)
-            .resourceURL?
-            .appendingPathComponent("WebConsoleDist", isDirectory: true),
-            FileManager.default.fileExists(atPath: bundledURL.path)
-        {
-            return bundledURL
-        }
-
-        // path dep / 本地源码运行时，资源未打包则退回源码目录。
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("WebConsoleDist", isDirectory: true)
-    }
 }

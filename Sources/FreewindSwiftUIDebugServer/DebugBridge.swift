@@ -10,6 +10,7 @@ import AppKit
 public final class DebugBridge {
     public let registry = DebugRegistry()
     public let appName: String
+    public let buildVersion: Int
     public let consoleTitle: String?
     public let host: String
 
@@ -22,29 +23,41 @@ public final class DebugBridge {
 
     public init(
         appName: String = "App",
+        buildVersion: Int = debugBundleBuildVersion(),
         consoleTitle: String? = nil,
         host: String = "127.0.0.1"
     ) {
         self.appName = appName
+        self.buildVersion = buildVersion
         self.consoleTitle = consoleTitle
         self.host = host
     }
 
+    @discardableResult
     public func registerIntent(
         name: String,
         args: [String] = [],
         perform: @escaping @MainActor (DebugActionRequest) -> DebugActionResponse
-    ) {
+    ) -> DebugRegistry.RegistrationToken {
         registry.registerIntent(name: name, args: args, perform: perform)
     }
 
+    @discardableResult
     public func registerNodeAction(
         id: String,
         action: String,
         args: [String] = [],
         perform: @escaping @MainActor (DebugActionRequest) -> DebugActionResponse
-    ) {
+    ) -> DebugRegistry.RegistrationToken {
         registry.registerNodeAction(id: id, action: action, args: args, perform: perform)
+    }
+
+    public func unregisterIntent(name: String) {
+        registry.unregisterIntent(name: name)
+    }
+
+    public func unregisterNodeAction(id: String, action: String) {
+        registry.unregisterNodeAction(id: id, action: action)
     }
 
     public func publishTargetState(id: String, state: [String: String]) {
@@ -66,6 +79,14 @@ public final class DebugBridge {
 
         server = DebugHTTPServer(
             port: port,
+            getMeta: { [weak self] in
+                await MainActor.run {
+                    guard let self else {
+                        return DebugMetaResponse(appName: "Unknown", buildVersion: 0)
+                    }
+                    return self.meta()
+                }
+            },
             getHelp: { [weak self] in
                 await MainActor.run {
                     guard let self else {
@@ -166,6 +187,10 @@ public final class DebugBridge {
         removeLifecycleHooks()
         port = nil
         statusMessage = "Not started"
+    }
+
+    private func meta() -> DebugMetaResponse {
+        DebugMetaResponse(appName: appName, buildVersion: buildVersion)
     }
 
     private func installLifecycleHooks() {

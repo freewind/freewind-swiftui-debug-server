@@ -4,6 +4,33 @@ import Observation
 @Observable
 @MainActor
 public final class DebugRegistry {
+    public final class RegistrationToken {
+        private let onCancel: @MainActor () -> Void
+        private var isCancelled = false
+
+        init(onCancel: @escaping @MainActor () -> Void) {
+            self.onCancel = onCancel
+        }
+
+        @MainActor
+        public func cancel() {
+            guard !isCancelled else {
+                return
+            }
+            isCancelled = true
+            onCancel()
+        }
+
+        deinit {
+            guard !isCancelled else {
+                return
+            }
+            Task { @MainActor [onCancel] in
+                onCancel()
+            }
+        }
+    }
+
     public private(set) var nodes: [String: DebugNodeSnapshot] = [:]
     private struct RegisteredAction {
         let args: [String]
@@ -33,21 +60,37 @@ public final class DebugRegistry {
             .forEach { nodeActions.removeValue(forKey: $0) }
     }
 
+    @discardableResult
     public func registerIntent(
         name: String,
         args: [String] = [],
         perform: @escaping @MainActor (DebugActionRequest) -> DebugActionResponse
-    ) {
+    ) -> RegistrationToken {
         intents[name] = RegisteredAction(args: args, perform: perform)
+        return RegistrationToken { [weak self] in
+            self?.unregisterIntent(name: name)
+        }
     }
 
+    @discardableResult
     public func registerNodeAction(
         id: String,
         action: String,
         args: [String] = [],
         perform: @escaping @MainActor (DebugActionRequest) -> DebugActionResponse
-    ) {
-        nodeActions["\(id)::\(action)"] = RegisteredAction(args: args, perform: perform)
+    ) -> RegistrationToken {
+        nodeActions[nodeActionKey(id: id, action: action)] = RegisteredAction(args: args, perform: perform)
+        return RegistrationToken { [weak self] in
+            self?.unregisterNodeAction(id: id, action: action)
+        }
+    }
+
+    public func unregisterIntent(name: String) {
+        intents.removeValue(forKey: name)
+    }
+
+    public func unregisterNodeAction(id: String, action: String) {
+        nodeActions.removeValue(forKey: nodeActionKey(id: id, action: action))
     }
 
     public func publishTargetState(id: String, state: [String: String]) {
@@ -65,7 +108,7 @@ public final class DebugRegistry {
             consoleTitle: context.consoleTitle,
             screenName: context.screenName,
             serverTime: context.serverTime,
-            capabilities: ["action", "logs", "state", "snapshot"],
+            capabilities: ["meta", "action", "logs", "state", "snapshot"],
             counts: DebugHelpCounts(
                 actionTargetCount: actionSummary.targetCount,
                 logCount: logs.count,
@@ -75,8 +118,8 @@ public final class DebugRegistry {
             endpoints: [
                 DebugEndpointDescriptor(
                     method: "GET",
-                    path: "/",
-                    summary: "open human-readable debug console"
+                    path: "/meta",
+                    summary: "return app identity and build version"
                 ),
                 DebugEndpointDescriptor(
                     method: "GET",
@@ -93,7 +136,7 @@ public final class DebugRegistry {
                     method: "POST",
                     path: "/action",
                     summary: "trigger one concrete action",
-                    bodyFields: ["action", "targetId", "text", "dx", "dy", "args"]
+                    bodyFields: ["action", "targetId", "text", "dx", "dy", "args", "source"]
                 ),
                 DebugEndpointDescriptor(
                     method: "GET",
@@ -120,8 +163,8 @@ public final class DebugRegistry {
                 ),
             ],
             examples: [
+                "GET /meta",
                 "GET /help",
-                "GET /",
                 "GET /action",
                 "GET /logs",
                 "DELETE /logs",
@@ -133,11 +176,9 @@ public final class DebugRegistry {
     }
 
     public func actionCatalog(context: DebugServerContext, query: DebugActionCatalogQuery) -> DebugActionCatalogResponse {
-        let groupedNodeActions = Dictionary(grouping: nodeActions.keys, by: { key in
-            String(key.split(separator: ":", maxSplits: 1).first ?? "")
-        })
+        let groupedNodeActions = groupedVisibleNodeActionKeys()
 
-        var items: [DebugActionCatalogItem] = groupedNodeActions.keys.sorted().map { targetId in
+        var items: [DebugActionCatalogItem] = groupedNodeActions.keys.sorted().compactMap { targetId in
             let actionNames = groupedNodeActions[targetId, default: []]
                 .compactMap { $0.components(separatedBy: "::").last }
                 .sorted()
@@ -145,7 +186,7 @@ public final class DebugRegistry {
             // Swift 6 在这里对 compactMap 推断不稳，显式构造更稳，也更利于后续扩字段。
             var descriptors: [DebugActionDescriptor] = []
             for actionName in actionNames {
-                guard let registered = nodeActions["\(targetId)::\(actionName)"] else {
+                guard let registered = nodeActions[nodeActionKey(id: targetId, action: actionName)] else {
                     continue
                 }
                 descriptors.append(
@@ -156,6 +197,10 @@ public final class DebugRegistry {
                         example: DebugActionRequest(action: actionName, targetId: targetId)
                     )
                 )
+            }
+
+            guard !descriptors.isEmpty else {
+                return nil
             }
 
             return DebugActionCatalogItem(
@@ -207,20 +252,29 @@ public final class DebugRegistry {
     }
 
     public func perform(request: DebugActionRequest) -> DebugActionResponse {
+        let startedAt = Date()
         let rawResult: DebugActionResponse
-        if let action = nodeActions["\(request.targetId)::\(request.action)"] {
+        if
+            nodes[request.targetId] != nil,
+            let action = nodeActions[nodeActionKey(id: request.targetId, action: request.action)]
+        {
             rawResult = action.perform(request)
         } else if request.action == "invoke", let intent = intents[request.targetId] {
             rawResult = intent.perform(request)
         } else {
-            rawResult = .fail("unsupported action")
+            rawResult = .fail("unsupported action", errorType: "unsupported_action")
         }
+
+        let durationMs = max(0, Int(Date().timeIntervalSince(startedAt) * 1000))
 
         let result = DebugActionResponse(
             accepted: rawResult.accepted,
             message: rawResult.message,
-            action: request.action,
-            targetId: request.targetId
+            action: rawResult.action ?? request.action,
+            targetId: rawResult.targetId ?? request.targetId,
+            errorType: rawResult.errorType,
+            timedOut: rawResult.timedOut,
+            durationMs: rawResult.durationMs ?? durationMs
         )
 
         var data = request.args ?? [:]
@@ -232,6 +286,9 @@ public final class DebugRegistry {
         }
         if let dy = request.dy {
             data["dy"] = "\(dy)"
+        }
+        if let durationMs = result.durationMs {
+            data["durationMs"] = "\(durationMs)"
         }
         data["accepted"] = result.accepted ? "true" : "false"
 
@@ -292,7 +349,9 @@ public final class DebugRegistry {
                         .map { key in
                             DebugStateKeySample(key: key, sample: appState[key] ?? "")
                         },
-                    targetStateTargets: targetStates.keys.sorted()
+                    targetStateTargets: targetStates.keys
+                        .filter { nodes[$0] != nil }
+                        .sorted()
                 )
             )
         }
@@ -304,9 +363,13 @@ public final class DebugRegistry {
 
         let targetStatePayload: [String: String]?
         if normalizedScope == "branch", let targetId = query.targetId {
-            targetStatePayload = filteredState(branchTargetState(targetId: targetId), keys: query.keys)
+            targetStatePayload = nodes[targetId] == nil
+                ? [:]
+                : filteredState(branchTargetState(targetId: targetId), keys: query.keys)
         } else if let targetId = query.targetId {
-            targetStatePayload = filteredState(targetStates[targetId] ?? [:], keys: query.keys)
+            targetStatePayload = nodes[targetId] == nil
+                ? [:]
+                : filteredState(targetStates[targetId] ?? [:], keys: query.keys)
         } else {
             targetStatePayload = nil
         }
@@ -471,14 +534,31 @@ public final class DebugRegistry {
     }
 
     private func actionSummaryCounts() -> DebugActionCatalogSummary {
-        let nodeTargetCount = Set(nodeActions.keys.map { key in
-            String(key.split(separator: ":", maxSplits: 1).first ?? "")
-        }).count
-        let actionCount = nodeActions.count + intents.count
+        let visibleNodeActionKeys = groupedVisibleNodeActionKeys()
+        let nodeTargetCount = visibleNodeActionKeys.count
+        let actionCount = visibleNodeActionKeys.values.reduce(0) { $0 + $1.count } + intents.count
         return DebugActionCatalogSummary(
             targetCount: nodeTargetCount + intents.count,
             actionCount: actionCount
         )
+    }
+
+    private func groupedVisibleNodeActionKeys() -> [String: [String]] {
+        Dictionary(
+            grouping: nodeActions.keys.filter { key in
+                guard let targetId = key.components(separatedBy: "::").first else {
+                    return false
+                }
+                return nodes[targetId] != nil
+            },
+            by: { key in
+                String(key.split(separator: ":", maxSplits: 1).first ?? "")
+            }
+        )
+    }
+
+    private func nodeActionKey(id: String, action: String) -> String {
+        "\(id)::\(action)"
     }
 
     private func logsSummary() -> DebugLogsSummary {
@@ -623,10 +703,13 @@ public final class DebugRegistry {
             type: fieldSet.contains("type") ? displayType(for: node) : nil,
             text: fieldSet.contains("text") ? node.label : nil,
             role: fieldSet.contains("role") ? node.role : nil,
+            backgroundColor: fieldSet.contains("backgroundColor") ? nil : nil,
+            contentColor: fieldSet.contains("contentColor") ? nil : nil,
             visible: fieldSet.contains("visible") ? node.isVisible : nil,
             enabled: fieldSet.contains("enabled") ? true : nil,
             clickable: fieldSet.contains("clickable") ? !node.actions.isEmpty : nil,
             value: fieldSet.contains("value") ? nil : nil,
+            extra: fieldSet.contains("extra") ? nil : nil,
             bounds: fieldSet.contains("bounds")
                 ? DebugBounds(left: node.x, top: node.y, width: node.width, height: node.height)
                 : nil
@@ -720,6 +803,20 @@ public final class DebugRegistry {
     }
 
     private var snapshotFieldCatalog: [String] {
-        ["id", "parentId", "type", "text", "role", "visible", "enabled", "clickable", "value", "bounds"]
+        [
+            "id",
+            "parentId",
+            "type",
+            "text",
+            "role",
+            "backgroundColor",
+            "contentColor",
+            "visible",
+            "enabled",
+            "clickable",
+            "value",
+            "extra",
+            "bounds",
+        ]
     }
 }
