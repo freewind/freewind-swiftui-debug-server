@@ -8,7 +8,7 @@ private struct HTTPRequest {
     let body: Data
 }
 
-final class DebugHTTPServer: @unchecked Sendable {
+final class DebugHTTPBridge: @unchecked Sendable {
     private let port: UInt16
     private let getMeta: @Sendable () async -> DebugMetaResponse
     private let getHelp: @Sendable () async -> DebugHelpResponse
@@ -72,7 +72,7 @@ final class DebugHTTPServer: @unchecked Sendable {
             let response = jsonErrorResponse(
                 status: "500 Internal Server Error",
                 message: error.localizedDescription,
-                errorType: "server_error"
+                errorType: "bridge_error"
             )
             try? await send(response, to: connection)
         }
@@ -127,7 +127,7 @@ final class DebugHTTPServer: @unchecked Sendable {
     private func parseRequest(_ data: Data) throws -> HTTPRequest {
         let delimiter = Data("\r\n\r\n".utf8)
         guard let range = data.range(of: delimiter) else {
-            throw NSError(domain: "DebugHTTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+            throw NSError(domain: "DebugHTTPBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
         }
 
         let headerData = data.subdata(in: 0..<range.lowerBound)
@@ -135,12 +135,12 @@ final class DebugHTTPServer: @unchecked Sendable {
         let headerText = String(decoding: headerData, as: UTF8.self)
         let lines = headerText.components(separatedBy: "\r\n")
         guard let requestLine = lines.first else {
-            throw NSError(domain: "DebugHTTPServer", code: 2, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+            throw NSError(domain: "DebugHTTPBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
         }
 
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2 else {
-            throw NSError(domain: "DebugHTTPServer", code: 3, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
+            throw NSError(domain: "DebugHTTPBridge", code: 3, userInfo: [NSLocalizedDescriptionKey: "Bad request"])
         }
 
         let method = String(parts[0])

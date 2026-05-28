@@ -38,8 +38,8 @@ public struct DebugNodeSnapshot: Codable, Identifiable, Sendable {
     }
 }
 
-// server 运行时上下文。
-public struct DebugServerContext: Sendable {
+// bridge 运行时上下文。
+public struct DebugBridgeContext: Sendable {
     public let appName: String
     public let consoleTitle: String?
     public let screenName: String
@@ -69,7 +69,7 @@ public struct DebugMetaResponse: Codable, Sendable {
 }
 
 // 外部动作请求。
-// 这里是 server ↔ 独立协议仓 的协议面；字段/语义变更时，需同步 freewind-debug-bridge-web 与 openapi 契约。
+// 这里是 bridge ↔ 独立协议仓 的协议面；字段/语义变更时，需同步 freewind-debug-bridge-web 与 openapi 契约。
 public struct DebugActionRequest: Codable, Sendable {
     public let action: String
     public let targetId: String

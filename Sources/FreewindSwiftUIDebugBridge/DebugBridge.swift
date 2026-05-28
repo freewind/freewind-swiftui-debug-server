@@ -14,7 +14,7 @@ public final class DebugBridge {
     public let consoleTitle: String?
     public let host: String
 
-    private var server: DebugHTTPServer?
+    private var httpBridge: DebugHTTPBridge?
     #if canImport(AppKit)
     private var willTerminateObserver: NSObjectProtocol?
     #endif
@@ -77,7 +77,7 @@ public final class DebugBridge {
         self.port = port
         installLifecycleHooks()
 
-        server = DebugHTTPServer(
+        httpBridge = DebugHTTPBridge(
             port: port,
             getMeta: { [weak self] in
                 await MainActor.run {
@@ -174,7 +174,7 @@ public final class DebugBridge {
         )
 
         do {
-            try server?.start()
+            try httpBridge?.start()
             statusMessage = "Listening at http://\(host):\(port)"
         } catch {
             statusMessage = "Start failed: \(error.localizedDescription)"
@@ -182,8 +182,8 @@ public final class DebugBridge {
     }
 
     public func stop() {
-        server?.stop()
-        server = nil
+        httpBridge?.stop()
+        httpBridge = nil
         removeLifecycleHooks()
         port = nil
         statusMessage = "Not started"
@@ -347,8 +347,8 @@ public final class DebugBridge {
         )
     }
 
-    private func makeContext(screenName: @escaping @MainActor () -> String) -> DebugServerContext {
-        DebugServerContext(
+    private func makeContext(screenName: @escaping @MainActor () -> String) -> DebugBridgeContext {
+        DebugBridgeContext(
             appName: appName,
             consoleTitle: consoleTitle,
             screenName: screenName()

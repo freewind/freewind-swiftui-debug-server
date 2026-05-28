@@ -101,7 +101,7 @@ public final class DebugRegistry {
         targetStates.removeValue(forKey: id)
     }
 
-    public func help(context: DebugServerContext, appState: [String: String]) -> DebugHelpResponse {
+    public func help(context: DebugBridgeContext, appState: [String: String]) -> DebugHelpResponse {
         let actionSummary = actionSummaryCounts()
         return DebugHelpResponse(
             appName: context.appName,
@@ -175,7 +175,7 @@ public final class DebugRegistry {
         )
     }
 
-    public func actionCatalog(context: DebugServerContext, query: DebugActionCatalogQuery) -> DebugActionCatalogResponse {
+    public func actionCatalog(context: DebugBridgeContext, query: DebugActionCatalogQuery) -> DebugActionCatalogResponse {
         let groupedNodeActions = groupedVisibleNodeActionKeys()
 
         var items: [DebugActionCatalogItem] = groupedNodeActions.keys.sorted().compactMap { targetId in
@@ -380,7 +380,7 @@ public final class DebugRegistry {
         )
     }
 
-    public func snapshot(context: DebugServerContext, query: DebugSnapshotQuery) -> DebugSnapshotResponse {
+    public func snapshot(context: DebugBridgeContext, query: DebugSnapshotQuery) -> DebugSnapshotResponse {
         guard query.hasFilters else {
             let summary = snapshotSummary(screenName: context.screenName)
             return DebugSnapshotResponse(
